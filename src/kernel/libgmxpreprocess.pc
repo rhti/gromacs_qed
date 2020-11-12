@@ -1,0 +1,13 @@
+prefix=/usr/local/gromacs
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libgmxpreprocess
+Description: Gromacs preprocess lib
+URL: http://www.gromacs.org
+Version: 4.5.3
+Requires: libgmx libmd 
+Libs: -L${libdir} -lgmxpreprocess   -lm
+Cflags: -I${includedir}   -DGMX_SOFTWARE_INVSQRT -DGMX_THREADS
+

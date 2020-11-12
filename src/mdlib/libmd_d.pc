@@ -1,0 +1,13 @@
+prefix=/usr/local/gromacs
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libmd
+Description: Gromacs md lib
+URL: http://www.gromacs.org
+Version: 4.5.3
+Requires: libgmx_d  libxml-2.0
+Libs: -L${libdir} -lmd_d  -liomp5 -lmkl_sequential -lmkl_core -lmkl_intel_lp64   -lm
+Cflags: -I${includedir}   -DGMX_DOUBLE -DGMX_SOFTWARE_INVSQRT
+

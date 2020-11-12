@@ -1,0 +1,13 @@
+prefix=/users/rhtichau/gromacs-4.5.3-QEDMM.10
+exec_prefix=${prefix}
+libdir=${exec_prefix}/lib
+includedir=${prefix}/include
+
+Name: libgmxana
+Description: Gromacs analysis lib
+URL: http://www.gromacs.org
+Version: 4.5.3
+Requires:  libgmx_mpi_d libmd_mpi_d
+Libs: -L${libdir} -lgmxana_mpi_d   -lm
+Cflags: -I${includedir}   -DGMX_DOUBLE -DGMX_SOFTWARE_INVSQRT -DGMX_LIB_MPI
+

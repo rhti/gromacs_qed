@@ -1,0 +1,2313 @@
+/*
+ * 
+ *                This source code is part of
+ * 
+ *                 G   R   O   M   A   C   S
+ * 
+ *          GROningen MAchine for Chemical Simulations
+ * 
+ *                        VERSION 3.2.0
+ * Written by David van der Spoel, Erik Lindahl, Berk Hess, and others.
+ * Copyright (c) 1991-2000, University of Groningen, The Netherlands.
+ * Copyright (c) 2001-2004, The GROMACS development team,
+ * check out http://www.gromacs.org for more information.
+ 
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ * 
+ * If you want to redistribute modifications, please consider that
+ * scientific software is very special. Version control is crucial -
+ * bugs must be traceable. We will be happy to consider code for
+ * inclusion in the official distribution, but derived work must not
+ * be called official GROMACS. Details are found in the README & COPYING
+ * files - if they are missing, get the official version at www.gromacs.org.
+ * 
+ * To help us fund GROMACS development, we humbly ask that you cite
+ * the papers on the package - you can find them in the top README file.
+ * 
+ * For more info, check our website at http://www.gromacs.org
+ * 
+ * And Hey:
+ * GROwing Monsters And Cloning Shrimps
+ */
+#ifdef HAVE_CONFIG_H
+#include <config.h>
+#endif
+
+#ifdef GMX_QMMM_GAUSSIAN
+
+#include <math.h>
+#include "sysstuff.h"
+#include "typedefs.h"
+#include "macros.h"
+#include "smalloc.h"
+#include "assert.h"
+#include "physics.h"
+#include "macros.h"
+#include "vec.h"
+#include "force.h"
+#include "invblock.h"
+#include "confio.h"
+#include "names.h"
+#include "network.h"
+#include "pbc.h"
+#include "ns.h"
+#include "nrnb.h"
+#include "bondf.h"
+#include "mshift.h"
+#include "txtdump.h"
+#include "copyrite.h"
+#include "qmmm.h"
+#include <stdio.h>
+#include <string.h>
+#include "gmx_fatal.h"
+#include "typedefs.h"
+#include "../tools/eigensolver.h"
+#include <stdlib.h>
+
+#include "do_fit.h"
+/* eigensolver stuff */
+#include "sparsematrix.h"
+
+
+#ifndef F77_FUNC
+#define F77_FUNC(name,NAME) name ## _
+#endif
+
+#include "gmx_lapack.h"
+#include "gmx_arpack.h"
+
+void
+eigensolver(real *   a,
+            int      n,
+            int      index_lower,
+            int      index_upper,
+            real *   eigenvalues,
+            real *   eigenvectors)
+{
+    int *   isuppz;
+    int     lwork,liwork;
+    int     il,iu,m,iw0,info;
+    real    w0,abstol;
+    int *   iwork;
+    real *  work;
+    real    vl,vu;
+    const char *  jobz;
+    
+    if(index_lower<0)
+        index_lower = 0;
+    
+    if(index_upper>=n)
+        index_upper = n-1;
+    
+    /* Make jobz point to the character "V" if eigenvectors
+     * should be calculated, otherwise "N" (only eigenvalues).
+     */   
+    jobz = (eigenvectors != NULL) ? "V" : "N";
+
+    /* allocate lapack stuff */
+    snew(isuppz,2*n);
+    vl = vu = 0;
+    
+    /* First time we ask the routine how much workspace it needs */
+    lwork  = -1;
+    liwork = -1;
+    abstol = 0;
+    
+    /* Convert indices to fortran standard */
+    index_lower++;
+    index_upper++;
+    
+    /* Call LAPACK routine using fortran interface. Note that we use upper storage,
+     * but this corresponds to lower storage ("L") in Fortran.
+     */    
+#ifdef GMX_DOUBLE
+    F77_FUNC(dsyevr,DSYEVR)(jobz,"I","L",&n,a,&n,&vl,&vu,&index_lower,&index_upper,
+                            &abstol,&m,eigenvalues,eigenvectors,&n,
+                            isuppz,&w0,&lwork,&iw0,&liwork,&info);
+#else
+    F77_FUNC(ssyevr,SSYEVR)(jobz,"I","L",&n,a,&n,&vl,&vu,&index_lower,&index_upper,
+                            &abstol,&m,eigenvalues,eigenvectors,&n,
+                            isuppz,&w0,&lwork,&iw0,&liwork,&info);
+#endif
+
+    if(info != 0)
+    {
+        sfree(isuppz);
+        gmx_fatal(FARGS,"Internal errror in LAPACK diagonalization.");        
+    }
+    
+    lwork = w0;
+    liwork = iw0;
+    
+    snew(work,lwork);
+    snew(iwork,liwork);
+    
+    abstol = 0;
+    
+#ifdef GMX_DOUBLE
+    F77_FUNC(dsyevr,DSYEVR)(jobz,"I","L",&n,a,&n,&vl,&vu,&index_lower,&index_upper,
+                            &abstol,&m,eigenvalues,eigenvectors,&n,
+                            isuppz,work,&lwork,iwork,&liwork,&info);
+#else
+    F77_FUNC(ssyevr,SSYEVR)(jobz,"I","L",&n,a,&n,&vl,&vu,&index_lower,&index_upper,
+                            &abstol,&m,eigenvalues,eigenvectors,&n,
+                            isuppz,work,&lwork,iwork,&liwork,&info);
+#endif
+    
+    sfree(isuppz);
+    sfree(work);
+    sfree(iwork);
+    
+    if(info != 0)
+    {
+        gmx_fatal(FARGS,"Internal errror in LAPACK diagonalization.");
+    }
+    
+}
+
+
+#ifdef GMX_MPI_NOT
+void 
+sparse_parallel_eigensolver(gmx_sparsematrix_t *    A,
+							int                     neig,
+							real *                  eigenvalues,
+							real *                  eigenvectors,
+							int                     maxiter)
+{
+    int      iwork[80];
+    int      iparam[11];
+    int      ipntr[11];
+    real *   resid;
+    real *   workd;
+    real *   workl;
+    real *   v;
+    int      n;
+    int      ido,info,lworkl,i,ncv,dovec;
+    real     abstol;
+    int *    select;
+    int      iter;
+    int      nnodes,rank;
+
+	MPI_Comm_size( MPI_COMM_WORLD, &nnodes );
+	MPI_Comm_rank( MPI_COMM_WORLD, &rank );
+	
+    if(eigenvectors != NULL)
+        dovec = 1;
+    else
+        dovec = 0;
+    
+    n   = A->nrow;
+    ncv = 2*neig;
+    
+    if(ncv>n)
+        ncv=n;
+    
+    for(i=0;i<11;i++)
+        iparam[i]=ipntr[i]=0;
+	
+	iparam[0] = 1;       /* Don't use explicit shifts */
+	iparam[2] = maxiter; /* Max number of iterations */
+	iparam[6] = 1;       /* Standard symmetric eigenproblem */
+    
+	lworkl = ncv*(8+ncv);
+    snew(resid,n);
+    snew(workd,(3*n+4));
+    snew(workl,lworkl);
+    snew(select,ncv);
+    snew(v,n*ncv);
+	
+    /* Use machine tolerance - roughly 1e-16 in double precision */
+    abstol = 0;
+    
+ 	ido = info = 0;
+    fprintf(stderr,"Calculation Ritz values and Lanczos vectors, max %d iterations...\n",maxiter);
+    
+    iter = 1;
+	do {
+#ifdef GMX_DOUBLE
+		F77_FUNC(pdsaupd,PDSAUPD)(&ido, "I", &n, "SA", &neig, &abstol, 
+								  resid, &ncv, v, &n, iparam, ipntr, 
+								  workd, iwork, workl, &lworkl, &info);
+#else
+		F77_FUNC(pssaupd,PSSAUPD)(&ido, "I", &n, "SA", &neig, &abstol, 
+								  resid, &ncv, v, &n, iparam, ipntr, 
+								  workd, iwork, workl, &lworkl, &info);
+#endif
+        if(ido==-1 || ido==1)
+            gmx_sparsematrix_vector_multiply(A,workd+ipntr[0]-1, workd+ipntr[1]-1);
+        
+        fprintf(stderr,"\rIteration %4d: %3d out of %3d Ritz values converged.",iter++,iparam[4],neig);
+	} while(info==0 && (ido==-1 || ido==1));
+	
+    fprintf(stderr,"\n");
+	if(info==1)
+    {
+	    gmx_fatal(FARGS,
+                  "Maximum number of iterations (%d) reached in Arnoldi\n"
+                  "diagonalization, but only %d of %d eigenvectors converged.\n",
+                  maxiter,iparam[4],neig);
+    }
+	else if(info!=0)
+    {
+        gmx_fatal(FARGS,"Unspecified error from Arnoldi diagonalization:%d\n",info);
+    }
+	
+	info = 0;
+	/* Extract eigenvalues and vectors from data */
+    fprintf(stderr,"Calculating eigenvalues and eigenvectors...\n");
+    
+#ifdef GMX_DOUBLE
+    F77_FUNC(pdseupd,PDSEUPD)(&dovec, "A", select, eigenvalues, eigenvectors, 
+							  &n, NULL, "I", &n, "SA", &neig, &abstol, 
+							  resid, &ncv, v, &n, iparam, ipntr, 
+							  workd, workl, &lworkl, &info);
+#else
+    F77_FUNC(psseupd,PSSEUPD)(&dovec, "A", select, eigenvalues, eigenvectors, 
+							  &n, NULL, "I", &n, "SA", &neig, &abstol, 
+							  resid, &ncv, v, &n, iparam, ipntr, 
+							  workd, workl, &lworkl, &info);
+#endif
+	
+    sfree(v);
+    sfree(resid);
+    sfree(workd);
+    sfree(workl);  
+    sfree(select);    
+}
+#endif
+
+
+void 
+sparse_eigensolver(gmx_sparsematrix_t *    A,
+                   int                     neig,
+                   real *                  eigenvalues,
+                   real *                  eigenvectors,
+                   int                     maxiter)
+{
+    int      iwork[80];
+    int      iparam[11];
+    int      ipntr[11];
+    real *   resid;
+    real *   workd;
+    real *   workl;
+    real *   v;
+    int      n;
+    int      ido,info,lworkl,i,ncv,dovec;
+    real     abstol;
+    int *    select;
+    int      iter;
+    
+#ifdef GMX_MPI_NOT
+	MPI_Comm_size( MPI_COMM_WORLD, &n );
+	if(n > 1)
+	{
+		sparse_parallel_eigensolver(A,neig,eigenvalues,eigenvectors,maxiter);
+		return;
+	}
+#endif
+	
+    if(eigenvectors != NULL)
+        dovec = 1;
+    else
+        dovec = 0;
+    
+    n   = A->nrow;
+    ncv = 2*neig;
+    
+    if(ncv>n)
+        ncv=n;
+    
+    for(i=0;i<11;i++)
+        iparam[i]=ipntr[i]=0;
+	
+	iparam[0] = 1;       /* Don't use explicit shifts */
+	iparam[2] = maxiter; /* Max number of iterations */
+	iparam[6] = 1;       /* Standard symmetric eigenproblem */
+    
+	lworkl = ncv*(8+ncv);
+    snew(resid,n);
+    snew(workd,(3*n+4));
+    snew(workl,lworkl);
+    snew(select,ncv);
+    snew(v,n*ncv);
+
+    /* Use machine tolerance - roughly 1e-16 in double precision */
+    abstol = 0;
+    
+ 	ido = info = 0;
+    fprintf(stderr,"Calculation Ritz values and Lanczos vectors, max %d iterations...\n",maxiter);
+    
+    iter = 1;
+	do {
+#ifdef GMX_DOUBLE
+            F77_FUNC(dsaupd,DSAUPD)(&ido, "I", &n, "SA", &neig, &abstol, 
+                                    resid, &ncv, v, &n, iparam, ipntr, 
+                                    workd, iwork, workl, &lworkl, &info);
+#else
+            F77_FUNC(ssaupd,SSAUPD)(&ido, "I", &n, "SA", &neig, &abstol, 
+                                    resid, &ncv, v, &n, iparam, ipntr, 
+                                    workd, iwork, workl, &lworkl, &info);
+#endif
+        if(ido==-1 || ido==1)
+            gmx_sparsematrix_vector_multiply(A,workd+ipntr[0]-1, workd+ipntr[1]-1);
+        
+        fprintf(stderr,"\rIteration %4d: %3d out of %3d Ritz values converged.",iter++,iparam[4],neig);
+	} while(info==0 && (ido==-1 || ido==1));
+	
+    fprintf(stderr,"\n");
+	if(info==1)
+    {
+	    gmx_fatal(FARGS,
+                  "Maximum number of iterations (%d) reached in Arnoldi\n"
+                  "diagonalization, but only %d of %d eigenvectors converged.\n",
+                  maxiter,iparam[4],neig);
+    }
+	else if(info!=0)
+    {
+        gmx_fatal(FARGS,"Unspecified error from Arnoldi diagonalization:%d\n",info);
+    }
+	
+	info = 0;
+	/* Extract eigenvalues and vectors from data */
+    fprintf(stderr,"Calculating eigenvalues and eigenvectors...\n");
+    
+#ifdef GMX_DOUBLE
+    F77_FUNC(dseupd,DSEUPD)(&dovec, "A", select, eigenvalues, eigenvectors, 
+			    &n, NULL, "I", &n, "SA", &neig, &abstol, 
+			    resid, &ncv, v, &n, iparam, ipntr, 
+			    workd, workl, &lworkl, &info);
+#else
+    F77_FUNC(sseupd,SSEUPD)(&dovec, "A", select, eigenvalues, eigenvectors, 
+			    &n, NULL, "I", &n, "SA", &neig, &abstol, 
+			    resid, &ncv, v, &n, iparam, ipntr, 
+			    workd, workl, &lworkl, &info);
+#endif
+	
+    sfree(v);
+    sfree(resid);
+    sfree(workd);
+    sfree(workl);  
+    sfree(select);    
+}
+
+
+/* end of eigensolver code */
+
+
+/* TODO: this should be made thread-safe */
+
+/* Gaussian interface routines */
+
+void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm)
+{
+  FILE    
+    *rffile=NULL,*out=NULL;
+  ivec
+    basissets[eQMbasisNR]={{0,3,0},
+			   {0,3,0},/*added for double sto-3g entry in names.c*/
+			   {5,0,0},
+			   {5,0,1},
+			   {5,0,11},
+			   {5,6,0},
+			   {1,6,0},
+			   {1,6,1},
+			   {1,6,11},
+			   {4,6,0}};
+  char
+    *buf;
+  int
+    i,ndim=2;
+  
+  /* using the ivec above to convert the basis read form the mdp file
+   * in a human readable format into some numbers for the gaussian
+   * route. This is necessary as we are using non standard routes to
+   * do SH.
+   */
+
+  /* per layer we make a new subdir for integral file, checkpoint
+   * files and such. These dirs are stored in the QMrec for
+   * convenience 
+   */
+
+  
+  if(!qm->nQMcpus){ /* this we do only once per layer 
+		     * as we call g01 externally 
+		     */
+
+    for(i=0;i<DIM;i++)
+      qm->SHbasis[i]=basissets[qm->QMbasis][i];
+
+  /* init gradually switching on of the SA */
+    qm->SAstep = 0;
+  /* we read the number of cpus and environment from the environment
+   * if set.  
+   */
+    snew(buf,20);
+    buf = getenv("NCPUS");
+    if (buf)
+      sscanf(buf,"%d",&qm->nQMcpus);
+    else
+      qm->nQMcpus=1;
+    fprintf(stderr,"number of CPUs for gaussian = %d\n",qm->nQMcpus);
+    snew(buf,50);
+    buf = getenv("MEM");
+    if (buf)
+      sscanf(buf,"%d",&qm->QMmem);
+    else
+      qm->QMmem=50000000;
+    fprintf(stderr,"memory for gaussian = %d\n",qm->QMmem);
+    snew(buf,30);
+    buf = getenv("ACC");
+    if (buf)
+      sscanf(buf,"%d",&qm->accuracy);
+    else
+      qm->accuracy=8;  
+    fprintf(stderr,"accuracy in l510 = %d\n",qm->accuracy); 
+    snew(buf,30);
+    buf = getenv("CPMCSCF");
+    if (buf)
+	{
+		sscanf(buf,"%d",&i);
+		qm->cpmcscf = (i!=0);
+	}
+	else
+      qm->cpmcscf=FALSE;
+    if (qm->cpmcscf)
+      fprintf(stderr,"using cp-mcscf in l1003\n");
+    else
+      fprintf(stderr,"NOT using cp-mcscf in l1003\n"); 
+    snew(buf,50);
+    buf = getenv("SASTEP");
+    if (buf)
+      sscanf(buf,"%d",&qm->SAstep);
+    else
+      /* init gradually switching on of the SA */
+      qm->SAstep = 0;
+    /* we read the number of cpus and environment from the environment
+     * if set.  
+     */
+    fprintf(stderr,"Level of SA at start = %d\n",qm->SAstep);
+        
+
+    /* punch the LJ C6 and C12 coefficients to be picked up by
+     * gaussian and usd to compute the LJ interaction between the
+     * MM and QM atoms.
+     */
+    if(qm->bTS||qm->bOPT){
+      out = fopen("LJ.dat","w");
+      for(i=0;i<qm->nrQMatoms;i++){
+
+#ifdef GMX_DOUBLE
+	fprintf(out,"%3d  %10.7lf  %10.7lf\n",
+		qm->atomicnumberQM[i],qm->c6[i],qm->c12[i]);
+#else
+	fprintf(out,"%3d  %10.7f  %10.7f\n",
+		qm->atomicnumberQM[i],qm->c6[i],qm->c12[i]);
+#endif
+      }
+      fclose(out);
+    }
+    /* gaussian settings on the system */
+    snew(buf,200);
+    buf = getenv("GAUSS_DIR");
+
+    if (buf){
+      snew(qm->gauss_dir,200);
+      sscanf(buf,"%s",qm->gauss_dir);
+    }
+    else
+      gmx_fatal(FARGS,"no $GAUSS_DIR, check gaussian manual\n");
+    
+    snew(buf,200);    
+    buf = getenv("GAUSS_EXE");
+    if (buf){
+      snew(qm->gauss_exe,200);
+      sscanf(buf,"%s",qm->gauss_exe);
+    }
+    else
+      gmx_fatal(FARGS,"no $GAUSS_EXE, check gaussian manual\n");
+    
+    snew(buf,200);
+    buf = getenv("DEVEL_DIR");
+    if (buf){
+      snew(qm->devel_dir,200);
+      sscanf(buf,"%s",qm->devel_dir);
+    }
+    else
+      gmx_fatal(FARGS,"no $DEVEL_DIR, this is were the modified links reside.\n");
+
+
+    if(qm->bQED){
+      fprintf(stderr,"\nDoing QED");
+      /* prepare for a cavity QED MD run. Obviously only works with QM/MM */
+      if(MULTISIM(cr)){
+	fprintf(stderr,"doing parallel; ms->nsim, ms_>sim = %d,%d\n", cr->ms->nsim,cr->ms->sim);
+	snew(qm->subdir,3000);
+	/* store the nodeid as the subdir */
+	sprintf(qm->subdir,"%s%d","/tmp/molecule",cr->ms->sim);
+	/* and create the directoru on the FS */
+	sprintf(buf,"%s %s","mkdir",qm->subdir);
+	system(buf);
+	ndim=cr->ms->nsim+1;
+	/* also we may have to initialize the Hamilton matrix in the
+	   molecule plus plasmon basis*/
+      }
+      snew(qm->eigvec,ndim*ndim);
+      snew(buf,3000);
+      buf = getenv("WORK_DIR");
+      if (buf){
+        snew(qm->work_dir,3000);
+        sscanf(buf,"%s",qm->work_dir);
+      }
+      else
+        gmx_fatal(FARGS,"no $DWORK_DIR, this is were the QED-specific output is written.\n");
+    }
+    /*  if(fr->bRF){*/
+    /* reactionfield, file is needed using gaussian */
+    /*    rffile=fopen("rf.dat","w");*/
+    /*   fprintf(rffile,"%f %f\n",fr->epsilon_r,fr->rcoulomb/BOHR2NM);*/
+    /* fclose(rffile);*/
+    /*  }*/
+  }
+  fprintf(stderr,"gaussian initialised...\n");
+}  
+
+
+
+void write_gaussian_SH_input(int step,gmx_bool swap,
+			     t_forcerec *fr, t_QMrec *qm, t_MMrec *mm)
+{
+  int
+    i;
+  gmx_bool
+    bSA;
+  FILE
+    *out;
+  t_QMMMrec
+    *QMMMrec;
+  QMMMrec = fr->qr;
+  bSA = (qm->SAstep>0);
+
+  out = fopen("input.com","w");
+  /* write the route */
+  fprintf(out,"%s","%scr=input\n");
+  fprintf(out,"%s","%rwf=input\n");
+  fprintf(out,"%s","%int=input\n");
+  fprintf(out,"%s","%d2e=input\n");
+/*  if(step)
+ *   fprintf(out,"%s","%nosave\n");
+ */
+  fprintf(out,"%s","%chk=input\n");
+  fprintf(out,"%s%d\n","%mem=",qm->QMmem);
+  fprintf(out,"%s%3d\n","%nprocshare=",qm->nQMcpus);
+
+  /* use the versions of
+   * l301 that computes the interaction between MM and QM atoms.
+   * l510 that can punch the CI coefficients
+   * l701 that can do gradients on MM atoms 
+   */
+
+  /* local version */
+  fprintf(out,"%s%s%s",
+	  "%subst l510 ",
+	  qm->devel_dir,
+	  "/l510\n");
+  fprintf(out,"%s%s%s",
+	  "%subst l301 ",
+	  qm->devel_dir,
+	  "/l301\n");
+  fprintf(out,"%s%s%s",
+	  "%subst l701 ",
+	  qm->devel_dir,
+	  "/l701\n");
+  
+  fprintf(out,"%s%s%s",
+	  "%subst l1003 ",
+	  qm->devel_dir,
+	  "/l1003\n");
+  fprintf(out,"%s%s%s",
+	  "%subst l9999 ",
+	  qm->devel_dir,
+	  "/l9999\n");
+  /* print the nonstandard route 
+   */
+  fprintf(out,"%s",
+	  "#P nonstd\n 1/18=10,20=1,38=1/1;\n");
+  fprintf(out,"%s",
+	  " 2/9=110,15=1,17=6,18=5,40=1/2;\n");
+  if(mm->nrMMatoms)
+    fprintf(out,
+	    " 3/5=%d,6=%d,7=%d,25=1,32=1,43=1,94=-2/1,2,3;\n",
+	    qm->SHbasis[0],
+	    qm->SHbasis[1],
+	    qm->SHbasis[2]); /*basisset stuff */
+  else
+    fprintf(out,
+	    " 3/5=%d,6=%d,7=%d,25=1,32=1,43=0,94=-2/1,2,3;\n",
+	    qm->SHbasis[0],
+	    qm->SHbasis[1],
+	    qm->SHbasis[2]); /*basisset stuff */
+  /* development */
+  if (step+1) /* fetch initial guess from check point file */
+    /* hack, to alyays read from chk file!!!!! */
+    fprintf(out,"%s%d,%s%d%s"," 4/5=1,7=6,17=",
+	    qm->CASelectrons,
+	    "18=",qm->CASorbitals,"/1,5;\n");
+  else /* generate the first checkpoint file */
+    fprintf(out,"%s%d,%s%d%s"," 4/5=0,7=6,17=",
+	    qm->CASelectrons,
+	    "18=",qm->CASorbitals,"/1,5;\n");
+  /* the rest of the input depends on where the system is on the PES 
+   */
+  if(swap && bSA){ /* make a slide to the other surface */
+    if(qm->CASorbitals>8){  /* use direct and no full diag */
+      fprintf(out," 5/5=2,7=512,16=-2,17=10000000,28=2,32=2,38=6,97=100/10;\n");
+    } 
+    else {
+      if(qm->cpmcscf){
+	fprintf(out," 5/5=2,6=%d,7=512,17=31000200,28=2,32=2,38=6,97=100/10;\n",
+		qm->accuracy);
+	if(mm->nrMMatoms>0)
+	  fprintf(out," 7/7=1,16=-2,30=1/1;\n");
+	fprintf(out," 11/31=1,42=1,45=1/1;\n");
+	fprintf(out," 10/6=1,10=700006,28=2,29=1,31=1,97=100/3;\n");
+	fprintf(out," 7/30=1/16;\n 99/10=4/99;\n");
+      }
+      else{
+	fprintf(out," 5/5=2,6=%d,7=512,17=11000000,28=2,32=2,38=6,97=100/10;\n",
+		qm->accuracy);
+	fprintf(out," 7/7=1,16=-2,30=1/1,2,3,16;\n 99/10=4/99;\n");
+      }
+    }
+  }
+  else if(bSA){ /* do a "state-averaged" CAS calculation */
+    if(qm->CASorbitals>8){ /* no full diag */ 
+      fprintf(out," 5/5=2,7=512,16=-2,17=10000000,28=2,32=2,38=6/10;\n");
+    } 
+    else {
+      if(qm->cpmcscf){
+	fprintf(out," 5/5=2,6=%d,7=512,17=31000200,28=2,32=2,38=6/10;\n",
+		qm->accuracy);
+	if(mm->nrMMatoms>0)
+	  fprintf(out," 7/7=1,16=-2,30=1/1;\n");
+	fprintf(out," 11/31=1,42=1,45=1/1;\n");
+	fprintf(out," 10/6=1,10=700006,28=2,29=1,31=1/3;\n");
+	fprintf(out," 7/30=1/16;\n 99/10=4/99;\n");
+      }
+      else{
+      	fprintf(out," 5/5=2,6=%d,7=512,17=11000000,28=2,32=2,38=6/10;\n",
+		qm->accuracy);
+	fprintf(out," 7/7=1,16=-2,30=1/1,2,3,16;\n 99/10=4/99;\n");
+      }
+    }
+  }
+  else if(swap){/* do a "swapped" CAS calculation */
+    if(qm->CASorbitals>8)
+      fprintf(out," 5/5=2,7=512,16=-2,17=0,28=2,32=2,38=6,97=100/10;\n");
+    else
+      fprintf(out," 5/5=2,6=%d,7=512,17=1000000,28=2,32=2,38=6,97=100/10;\n",
+	      qm->accuracy);
+    fprintf(out," 7/7=1,16=-2,30=1/1,2,3,16;\n 99/10=4/99;\n");
+  }
+  else {/* do a "normal" CAS calculation */
+    if(qm->CASorbitals>8)
+      fprintf(out," 5/5=2,7=512,16=-2,17=0,28=2,32=2,38=6/10;\n");
+    else
+      fprintf(out," 5/5=2,6=%d,7=512,17=1000000,28=2,32=2,38=6/10;\n",
+	      qm->accuracy);
+    fprintf(out," 7/7=1,16=-2,30=1/1,2,3,16;\n 99/10=4/99;\n");
+  }
+  fprintf(out, "\ninput-file generated by gromacs\n\n");
+  fprintf(out,"%2d%2d\n",qm->QMcharge,qm->multiplicity);
+  for (i=0;i<qm->nrQMatoms;i++){
+#ifdef GMX_DOUBLE
+    fprintf(out,"%3d %10.7lf  %10.7lf  %10.7lf\n",
+	    qm->atomicnumberQM[i],
+	    qm->xQM[i][XX]/BOHR2NM,
+	    qm->xQM[i][YY]/BOHR2NM,
+	    qm->xQM[i][ZZ]/BOHR2NM);
+#else
+    fprintf(out,"%3d %10.7f  %10.7f  %10.7f\n",
+	    qm->atomicnumberQM[i],
+	    qm->xQM[i][XX]/BOHR2NM,
+	    qm->xQM[i][YY]/BOHR2NM,
+	    qm->xQM[i][ZZ]/BOHR2NM);
+#endif
+  }
+  /* MM point charge data */
+  if(QMMMrec->QMMMscheme!=eQMMMschemeoniom && mm->nrMMatoms){
+    fprintf(out,"\n");
+    for(i=0;i<mm->nrMMatoms;i++){
+#ifdef GMX_DOUBLE
+      fprintf(out,"%10.7lf  %10.7lf  %10.7lf %8.4lf\n",
+	      mm->xMM[i][XX]/BOHR2NM,
+	      mm->xMM[i][YY]/BOHR2NM,
+	      mm->xMM[i][ZZ]/BOHR2NM,
+	      mm->MMcharges[i]);
+#else
+      fprintf(out,"%10.7f  %10.7f  %10.7f %8.4f\n",
+	      mm->xMM[i][XX]/BOHR2NM,
+	      mm->xMM[i][YY]/BOHR2NM,
+	      mm->xMM[i][ZZ]/BOHR2NM,
+	      mm->MMcharges[i]);
+#endif
+    }
+  }
+  if(bSA) {/* put the SA coefficients at the end of the file */
+#ifdef GMX_DOUBLE
+    fprintf(out,"\n%10.8lf %10.8lf\n",
+	    qm->SAstep*0.5/qm->SAsteps,
+	    1-qm->SAstep*0.5/qm->SAsteps);
+#else    
+    fprintf(out,"\n%10.8f %10.8f\n",
+	    qm->SAstep*0.5/qm->SAsteps,
+	    1-qm->SAstep*0.5/qm->SAsteps);
+#endif
+    fprintf(stderr,"State Averaging level = %d/%d\n",qm->SAstep,qm->SAsteps);
+  }
+  fprintf(out,"\n");
+  fclose(out);
+}  /* write_gaussian_SH_input */
+
+void write_gaussian_input(int step ,t_forcerec *fr, t_QMrec *qm, t_MMrec *mm)
+{
+  int
+    i;
+  t_QMMMrec
+    *QMMMrec;
+  FILE
+    *out;
+  
+  QMMMrec = fr->qr;
+  out = fopen("input.com","w");
+  /* write the route */
+
+  if(qm->QMmethod>=eQMmethodRHF)
+    fprintf(out,"%s",
+	    "%chk=input\n");
+  else
+    fprintf(out,"%s",
+	    "%chk=se\n");
+  if(qm->nQMcpus>1)
+    fprintf(out,"%s%3d\n",
+	    "%nprocshare=",qm->nQMcpus);
+  fprintf(out,"%s%d\n",
+	  "%mem=",qm->QMmem);
+  /* use the modified links that include the LJ contribution at the QM level */
+  if(qm->bTS||qm->bOPT){
+    fprintf(out,"%s%s%s",
+	    "%subst l701 ",qm->devel_dir,"/l701_LJ\n");
+    fprintf(out,"%s%s%s",
+	    "%subst l301 ",qm->devel_dir,"/l301_LJ\n");
+  }
+  else{
+    fprintf(out,"%s%s%s",
+	    "%subst l701 ",qm->devel_dir,"/l701\n");
+    fprintf(out,"%s%s%s",
+	    "%subst l301 ",qm->devel_dir,"/l301\n");
+  }
+  fprintf(out,"%s%s%s",
+	  "%subst l9999 ",qm->devel_dir,"/l9999\n");
+  if(step){
+    fprintf(out,"%s",
+	    "#T ");
+  }else{
+    fprintf(out,"%s",
+	    "#P ");
+  }
+  if(qm->QMmethod==eQMmethodB3LYPLAN){
+    fprintf(out," %s", 
+	    "B3LYP/GEN Pseudo=Read");
+  }
+  else{
+    fprintf(out," %s", 
+	    eQMmethod_names[qm->QMmethod]);
+    
+    if(qm->QMmethod>=eQMmethodRHF){
+      fprintf(out,"/%s",
+	      eQMbasis_names[qm->QMbasis]);
+      if(qm->QMmethod==eQMmethodCASSCF){
+	/* in case of cas, how many electrons and orbitals do we need?
+	 */
+	fprintf(out,"(%d,%d)",
+		qm->CASelectrons,qm->CASorbitals);
+      }
+    }
+  }
+  if(QMMMrec->QMMMscheme==eQMMMschemenormal){
+    fprintf(out," %s",
+	    "Charge ");
+  }
+  if (step || qm->QMmethod==eQMmethodCASSCF){
+    /* fetch guess from checkpoint file, always for CASSCF */
+    fprintf(out,"%s"," guess=read");
+  }
+  fprintf(out,"\nNosymm units=bohr\n");
+  
+  if(qm->bTS){
+    fprintf(out,"OPT=(Redundant,TS,noeigentest,ModRedundant) Punch=(Coord,Derivatives) ");
+  }
+  else if (qm->bOPT){
+    fprintf(out,"OPT=(Redundant,ModRedundant) Punch=(Coord,Derivatives) ");
+  }
+  else{
+    fprintf(out,"FORCE Punch=(Derivatives) ");
+  }
+  fprintf(out,"iop(3/33=1)\n\n");
+  fprintf(out, "input-file generated by gromacs\n\n");
+  fprintf(out,"%2d%2d\n",qm->QMcharge,qm->multiplicity);
+  for (i=0;i<qm->nrQMatoms;i++){
+#ifdef GMX_DOUBLE
+    fprintf(out,"%3d %10.7lf  %10.7lf  %10.7lf\n",
+	    qm->atomicnumberQM[i],
+	    qm->xQM[i][XX]/BOHR2NM,
+	    qm->xQM[i][YY]/BOHR2NM,
+	    qm->xQM[i][ZZ]/BOHR2NM);
+#else
+    fprintf(out,"%3d %10.7f  %10.7f  %10.7f\n",
+	    qm->atomicnumberQM[i],
+	    qm->xQM[i][XX]/BOHR2NM,
+	    qm->xQM[i][YY]/BOHR2NM,
+	    qm->xQM[i][ZZ]/BOHR2NM);
+#endif
+  }
+
+  /* Pseudo Potential and ECP are included here if selected (MEthod suffix LAN) */
+  if(qm->QMmethod==eQMmethodB3LYPLAN){
+    fprintf(out,"\n");
+    for(i=0;i<qm->nrQMatoms;i++){
+      if(qm->atomicnumberQM[i]<21){
+	fprintf(out,"%d ",i+1);
+      }
+    }
+    fprintf(out,"\n%s\n****\n",eQMbasis_names[qm->QMbasis]);
+    
+    for(i=0;i<qm->nrQMatoms;i++){
+      if(qm->atomicnumberQM[i]>21){
+	fprintf(out,"%d ",i+1);
+      }
+    }
+    fprintf(out,"\n%s\n****\n\n","lanl2dz");    
+    
+    for(i=0;i<qm->nrQMatoms;i++){
+      if(qm->atomicnumberQM[i]>21){
+	fprintf(out,"%d ",i+1);
+      }
+    }
+    fprintf(out,"\n%s\n","lanl2dz");    
+  }    
+  
+    
+  
+  /* MM point charge data */
+  if(QMMMrec->QMMMscheme!=eQMMMschemeoniom && mm->nrMMatoms){
+    fprintf(stderr,"nr mm atoms in gaussian.c = %d\n",mm->nrMMatoms);
+    fprintf(out,"\n");
+    if(qm->bTS||qm->bOPT){
+      /* freeze the frontier QM atoms and Link atoms. This is
+       * important only if a full QM subsystem optimization is done
+       * with a frozen MM environmeent. For dynamics, or gromacs's own
+       * optimization routines this is not important.
+       */
+      for(i=0;i<qm->nrQMatoms;i++){
+	if(qm->frontatoms[i]){
+	  fprintf(out,"%d F\n",i+1); /* counting from 1 */
+	}
+      }
+      /* MM point charges include LJ parameters in case of QM optimization
+       */
+      for(i=0;i<mm->nrMMatoms;i++){
+#ifdef GMX_DOUBLE
+	fprintf(out,"%10.7lf  %10.7lf  %10.7lf %8.4lf 0.0 %10.7lf %10.7lf\n",
+		mm->xMM[i][XX]/BOHR2NM,
+		mm->xMM[i][YY]/BOHR2NM,
+		mm->xMM[i][ZZ]/BOHR2NM,
+		mm->MMcharges[i],
+		mm->c6[i],mm->c12[i]);
+#else
+	fprintf(out,"%10.7f  %10.7f  %10.7f %8.4f 0.0 %10.7f %10.7f\n",
+		mm->xMM[i][XX]/BOHR2NM,
+		mm->xMM[i][YY]/BOHR2NM,
+		mm->xMM[i][ZZ]/BOHR2NM,
+		mm->MMcharges[i],
+		mm->c6[i],mm->c12[i]);
+#endif
+      }
+      fprintf(out,"\n");
+    }
+    else{
+      for(i=0;i<mm->nrMMatoms;i++){
+#ifdef GMX_DOUBLE
+	fprintf(out,"%10.7lf  %10.7lf  %10.7lf %8.4lf\n",
+		mm->xMM[i][XX]/BOHR2NM,
+		mm->xMM[i][YY]/BOHR2NM,
+		mm->xMM[i][ZZ]/BOHR2NM,
+		mm->MMcharges[i]);
+#else
+	fprintf(out,"%10.7f  %10.7f  %10.7f %8.4f\n",
+		mm->xMM[i][XX]/BOHR2NM,
+		mm->xMM[i][YY]/BOHR2NM,
+		mm->xMM[i][ZZ]/BOHR2NM,
+		mm->MMcharges[i]);
+#endif
+      }
+    }
+  }
+  fprintf(out,"\n");
+  
+
+  fclose(out);
+
+}  /* write_gaussian_input */
+
+
+void write_gaussian_input_QED(t_commrec *cr,int step ,t_forcerec *fr, t_QMrec *qm, t_MMrec *mm)
+{
+  int
+    i;
+  t_QMMMrec
+    *QMMMrec;
+  FILE
+    *out;
+  
+  QMMMrec = fr->qr;
+
+  /* move to a new working directory! */
+
+  if(MULTISIM(cr)){
+    chdir (qm->subdir);
+  }
+  out = fopen("input.com","w");
+  /* write the route */
+
+  if(qm->QMmethod>=eQMmethodRHF)
+    fprintf(out,"%s",
+	    "%chk=input\n");
+  else
+    fprintf(out,"%s",
+	    "%chk=se\n");
+  if(qm->nQMcpus>1)
+    fprintf(out,"%s%3d\n",
+	    "%nprocshare=",qm->nQMcpus);
+  fprintf(out,"%s%d\n",
+	  "%mem=",qm->QMmem);
+  /* use the modified links that include the LJ contribution at the QM level */
+  if(qm->bTS||qm->bOPT){
+    fprintf(out,"%s%s%s",
+	    "%subst l701 ",qm->devel_dir,"/l701_LJ\n");
+    fprintf(out,"%s%s%s",
+	    "%subst l301 ",qm->devel_dir,"/l301_LJ\n");
+  }
+  else{
+    fprintf(out,"%s%s%s",
+	    "%subst l701 ",qm->devel_dir,"/l701\n");
+    fprintf(out,"%s%s%s",
+	    "%subst l301 ",qm->devel_dir,"/l301\n");
+  }
+  fprintf(out,"%s%s%s",
+	  "%subst l9999 ",qm->devel_dir,"/l9999\n");
+  if(step){
+    fprintf(out,"%s",
+	    "#T ");
+  }else{
+/* MOD 12.11.20116 */
+    fprintf(out,"%s",
+	    "#T ");
+  }
+  if(qm->QMmethod==eQMmethodB3LYPLAN){
+    fprintf(out," %s", 
+	    "B3LYP/GEN Pseudo=Read");
+  }
+  else{
+    fprintf(out," %s", 
+	    eQMmethod_names[qm->QMmethod]);
+    
+    if(qm->QMmethod>=eQMmethodRHF){
+      fprintf(out,"/%s",
+	      eQMbasis_names[qm->QMbasis]);
+      if(qm->QMmethod==eQMmethodCASSCF){
+	/* in case of cas, how many electrons and orbitals do we need?
+	 */
+	fprintf(out,"(%d,%d)",
+		qm->CASelectrons,qm->CASorbitals);
+      }
+    }
+  }
+  if(QMMMrec->QMMMscheme==eQMMMschemenormal){
+    fprintf(out," %s",
+	    "Charge ");
+  }
+  if (qm->QMmethod==eQMmethodCASSCF){
+    /* fetch guess from checkpoint file, always for CASSCF */
+    fprintf(out,"%s"," guess=read");
+  }
+  fprintf(out,"\nNosymm units=bohr\n");
+  
+  if(qm->bTS){
+    fprintf(out,"OPT=(Redundant,TS,noeigentest,ModRedundant) Punch=(Coord,Derivatives) ");
+  }
+  else if (qm->bOPT){
+    fprintf(out,"OPT=(Redundant,ModRedundant) Punch=(Coord,Derivatives) ");
+  }
+  else{
+    fprintf(out,"FORCE Punch=(Derivatives) ");
+  }
+  fprintf(out,"iop(3/33=1)\n\n");
+  fprintf(out, "input-file generated by gromacs\n\n");
+  fprintf(out,"%2d%2d\n",qm->QMcharge,qm->multiplicity);
+  for (i=0;i<qm->nrQMatoms;i++){
+#ifdef GMX_DOUBLE
+    fprintf(out,"%3d %10.7lf  %10.7lf  %10.7lf\n",
+	    qm->atomicnumberQM[i],
+	    qm->xQM[i][XX]/BOHR2NM,
+	    qm->xQM[i][YY]/BOHR2NM,
+	    qm->xQM[i][ZZ]/BOHR2NM);
+#else
+    fprintf(out,"%3d %10.7f  %10.7f  %10.7f\n",
+	    qm->atomicnumberQM[i],
+	    qm->xQM[i][XX]/BOHR2NM,
+	    qm->xQM[i][YY]/BOHR2NM,
+	    qm->xQM[i][ZZ]/BOHR2NM);
+#endif
+  }
+
+  /* Pseudo Potential and ECP are included here if selected (MEthod suffix LAN) */
+  if(qm->QMmethod==eQMmethodB3LYPLAN){
+    fprintf(out,"\n");
+    for(i=0;i<qm->nrQMatoms;i++){
+      if(qm->atomicnumberQM[i]<21){
+	fprintf(out,"%d ",i+1);
+      }
+    }
+    fprintf(out,"\n%s\n****\n",eQMbasis_names[qm->QMbasis]);
+    
+    for(i=0;i<qm->nrQMatoms;i++){
+      if(qm->atomicnumberQM[i]>21){
+	fprintf(out,"%d ",i+1);
+      }
+    }
+    fprintf(out,"\n%s\n****\n\n","lanl2dz");    
+    
+    for(i=0;i<qm->nrQMatoms;i++){
+      if(qm->atomicnumberQM[i]>21){
+	fprintf(out,"%d ",i+1);
+      }
+    }
+    fprintf(out,"\n%s\n","lanl2dz");    
+  }    
+  
+    
+  
+  /* MM point charge data */
+  if(QMMMrec->QMMMscheme!=eQMMMschemeoniom && mm->nrMMatoms){
+//    fprintf(stderr,"nr mm atoms in gaussian.c = %d\n",mm->nrMMatoms);
+    fprintf(out,"\n");
+    if(qm->bTS||qm->bOPT){
+      /* freeze the frontier QM atoms and Link atoms. This is
+       * important only if a full QM subsystem optimization is done
+       * with a frozen MM environmeent. For dynamics, or gromacs's own
+       * optimization routines this is not important.
+       */
+      for(i=0;i<qm->nrQMatoms;i++){
+	if(qm->frontatoms[i]){
+	  fprintf(out,"%d F\n",i+1); /* counting from 1 */
+	}
+      }
+      /* MM point charges include LJ parameters in case of QM optimization
+       */
+      for(i=0;i<mm->nrMMatoms;i++){
+#ifdef GMX_DOUBLE
+	fprintf(out,"%10.7lf  %10.7lf  %10.7lf %8.4lf 0.0 %10.7lf %10.7lf\n",
+		mm->xMM[i][XX]/BOHR2NM,
+		mm->xMM[i][YY]/BOHR2NM,
+		mm->xMM[i][ZZ]/BOHR2NM,
+		mm->MMcharges[i],
+		mm->c6[i],mm->c12[i]);
+#else
+	fprintf(out,"%10.7f  %10.7f  %10.7f %8.4f 0.0 %10.7f %10.7f\n",
+		mm->xMM[i][XX]/BOHR2NM,
+		mm->xMM[i][YY]/BOHR2NM,
+		mm->xMM[i][ZZ]/BOHR2NM,
+		mm->MMcharges[i],
+		mm->c6[i],mm->c12[i]);
+#endif
+      }
+      fprintf(out,"\n");
+    }
+    else{
+      for(i=0;i<mm->nrMMatoms;i++){
+#ifdef GMX_DOUBLE
+	fprintf(out,"%10.7lf  %10.7lf  %10.7lf %8.4lf\n",
+		mm->xMM[i][XX]/BOHR2NM,
+		mm->xMM[i][YY]/BOHR2NM,
+		mm->xMM[i][ZZ]/BOHR2NM,
+		mm->MMcharges[i]);
+#else
+	fprintf(out,"%10.7f  %10.7f  %10.7f %8.4f\n",
+		mm->xMM[i][XX]/BOHR2NM,
+		mm->xMM[i][YY]/BOHR2NM,
+		mm->xMM[i][ZZ]/BOHR2NM,
+		mm->MMcharges[i]);
+#endif
+      }
+    }
+  }
+  fprintf(out,"\n");
+  
+
+  fclose(out);
+
+}  /* write_gaussian_input_QED */
+
+real read_gaussian_output_QED(t_commrec *cr,rvec QMgrad_S1[],rvec MMgrad_S1[],
+			      rvec QMgrad_S0[],rvec MMgrad_S0[],int step,
+			      t_QMrec *qm, t_MMrec *mm,rvec *tdm, 
+                              rvec tdmgrad[], real *Eground)
+{
+  int
+    i,j,atnum;
+  char
+    buf[3000],*buf2;
+  real
+    QMener,rinv,qtdm;
+  FILE
+    *in_S1,*in_S0;
+
+  if (MULTISIM(cr)){ 
+    chdir (qm->subdir);
+  } 
+  in_S1=fopen("S1.out","r");
+
+
+
+
+  /* the next line is the energy and in the case of CAS, the energy
+   * difference between the two states.
+   */
+  if(NULL == fgets(buf,3000,in_S1))
+  {
+      gmx_fatal(FARGS,"Error reading Gaussian output");
+  }
+
+#ifdef GMX_DOUBLE
+  sscanf(buf,"%lf\n",&QMener);
+#else
+  sscanf(buf,"%f\n", &QMener);
+#endif
+  /* next lines contain the excited state gradients of the QM atoms */
+  for(i=0;i<qm->nrQMatoms;i++){
+    if(NULL == fgets(buf,3000,in_S1))
+    {
+	gmx_fatal(FARGS,"Error reading Gaussian output");
+    }
+#ifdef GMX_DOUBLE
+    sscanf(buf,"%lf %lf %lf\n",
+	   &QMgrad_S1[i][XX],
+	   &QMgrad_S1[i][YY],
+	   &QMgrad_S1[i][ZZ]);
+#else
+    sscanf(buf,"%f %f %f\n",
+	   &QMgrad_S1[i][XX],
+	   &QMgrad_S1[i][YY],
+	   &QMgrad_S1[i][ZZ]);
+#endif     
+  }
+  /* the next lines are the gradients of the MM atoms */
+  if(qm->QMmethod>=eQMmethodRHF){  
+    for(i=0;i<mm->nrMMatoms;i++){
+      if(NULL==fgets(buf,3000,in_S1))
+      {
+          gmx_fatal(FARGS,"Error reading Gaussian output");
+      }
+#ifdef GMX_DOUBLE
+      sscanf(buf,"%lf %lf %lf\n",
+	     &MMgrad_S1[i][XX],
+	     &MMgrad_S1[i][YY],
+	     &MMgrad_S1[i][ZZ]);
+#else
+      sscanf(buf,"%f %f %f\n",
+	     &MMgrad_S1[i][XX],
+	     &MMgrad_S1[i][YY],
+	     &MMgrad_S1[i][ZZ]);
+#endif	
+    }
+  }
+  /* now comes the transition dipole moments  */
+  if(NULL==fgets(buf,3000,in_S1))
+    {
+      gmx_fatal(FARGS,"Error reading Gaussian output");
+    }
+#ifdef GMX_DOUBLE
+  sscanf(buf,"%lf %lf %lf\n",
+	     &tdm[0][XX],
+	     &tdm[0][YY],
+	     &tdm[0][ZZ]);
+#else
+  sscanf(buf,"%f %f %f\n",
+	 &tdm[0][XX],
+ &tdm[0][YY],
+	 &tdm[0][ZZ]);
+#endif	
+  /* here should come the deriv. of the dipole, but we don't have that yet */
+  for (i = 0 ; i< qm->nrQMatoms; i++ )
+    {
+#ifdef GMX_DOUBLE
+      sscanf(buf,"%lf\n",&qtdm);
+#else
+      sscanf(buf,"%lf\n",&qtdm);
+#endif
+      /* calculate gradient immediately */
+      rinv = 1/dnorm(qm->xQM[i]);
+      for (j=0;j<DIM;j++){
+        tdmgrad[i][j] = (qtdm-(double)(qm->atomicnumberQM[i]))*0.278215*(qm->xQM[i][j])*rinv;
+      }
+    }  
+
+  in_S0=fopen("S0.out","r");
+  if (in_S0==NULL)
+    gmx_fatal(FARGS,"Error reading Gaussian output");
+  /* now read in ground state information from a second file */
+  if(NULL == fgets(buf,3000,in_S0))
+    {
+      gmx_fatal(FARGS,"Error reading Gaussian output");
+    }
+  
+#ifdef GMX_DOUBLE
+  sscanf(buf,"%lf\n",Eground);
+#else
+  sscanf(buf,"%f\n", Eground);
+#endif
+  /* next lines contain the excited state gradients of the QM atoms */
+  for(i=0;i<qm->nrQMatoms;i++){
+    if(NULL == fgets(buf,3000,in_S0))
+    {
+	gmx_fatal(FARGS,"Error reading Gaussian output");
+    }
+#ifdef GMX_DOUBLE
+    sscanf(buf,"%lf %lf %lf\n",
+	   &QMgrad_S0[i][XX],
+	   &QMgrad_S0[i][YY],
+	   &QMgrad_S0[i][ZZ]);
+#else
+    sscanf(buf,"%f %f %f\n",
+	   &QMgrad_S0[i][XX],
+	   &QMgrad_S0[i][YY],
+	   &QMgrad_S0[i][ZZ]);
+#endif     
+  }
+  /* the next lines are the gradients of the MM atoms */
+  for(i=0;i<mm->nrMMatoms;i++){
+    if(NULL==fgets(buf,3000,in_S0))
+      {
+	gmx_fatal(FARGS,"Error reading Gaussian output");
+      }
+#ifdef GMX_DOUBLE
+      sscanf(buf,"%lf %lf %lf\n",
+	     &MMgrad_S0[i][XX],
+	     &MMgrad_S0[i][YY],
+	     &MMgrad_S0[i][ZZ]);
+#else
+      sscanf(buf,"%f %f %f\n",
+	     &MMgrad_S0[i][XX],
+	     &MMgrad_S0[i][YY],
+	     &MMgrad_S0[i][ZZ]);
+#endif	
+  }
+  fclose(in_S0);
+  fclose(in_S1);
+
+  /* go back to main directory to avoid messing up other i/o operations 
+   */
+  //chdir("..");
+  return(QMener);  
+} /* read_gaussian_output_QED */
+
+real read_gaussian_output(rvec QMgrad[],rvec MMgrad[],int step,
+			  t_QMrec *qm, t_MMrec *mm)
+{
+  int
+    i,j,atnum;
+  char
+    buf[300];
+  real
+    QMener;
+  FILE
+    *in;
+  
+  in=fopen("fort.7","r");
+
+
+
+  /* in case of an optimization, the coordinates are printed in the
+   * fort.7 file first, followed by the energy, coordinates and (if
+   * required) the CI eigenvectors.
+   */
+  if(qm->bTS||qm->bOPT){
+    for(i=0;i<qm->nrQMatoms;i++){
+      if( NULL == fgets(buf,300,in))
+      {
+	  gmx_fatal(FARGS,"Error reading Gaussian output - not enough atom lines?");
+      }
+
+#ifdef GMX_DOUBLE
+      sscanf(buf,"%d %lf %lf %lf\n",
+	     &atnum,
+	     &qm->xQM[i][XX],
+	     &qm->xQM[i][YY],
+	     &qm->xQM[i][ZZ]);
+#else
+      sscanf(buf,"%d %f %f %f\n",
+	     &atnum,
+	     &qm->xQM[i][XX],
+	     &qm->xQM[i][YY],
+	     &qm->xQM[i][ZZ]);
+#endif     
+      for(j=0;j<DIM;j++){
+	qm->xQM[i][j]*=BOHR2NM;
+      }
+    }
+  }
+  /* the next line is the energy and in the case of CAS, the energy
+   * difference between the two states.
+   */
+  if(NULL == fgets(buf,300,in))
+  {
+      gmx_fatal(FARGS,"Error reading Gaussian output");
+  }
+
+#ifdef GMX_DOUBLE
+  sscanf(buf,"%lf\n",&QMener);
+#else
+  sscanf(buf,"%f\n", &QMener);
+#endif
+  /* next lines contain the gradients of the QM atoms */
+  for(i=0;i<qm->nrQMatoms;i++){
+    if(NULL == fgets(buf,300,in))
+    {
+	gmx_fatal(FARGS,"Error reading Gaussian output");
+    }
+#ifdef GMX_DOUBLE
+    sscanf(buf,"%lf %lf %lf\n",
+	   &QMgrad[i][XX],
+	   &QMgrad[i][YY],
+	   &QMgrad[i][ZZ]);
+#else
+    sscanf(buf,"%f %f %f\n",
+	   &QMgrad[i][XX],
+	   &QMgrad[i][YY],
+	   &QMgrad[i][ZZ]);
+#endif     
+  }
+  /* the next lines are the gradients of the MM atoms */
+  if(qm->QMmethod>=eQMmethodRHF){  
+    for(i=0;i<mm->nrMMatoms;i++){
+      if(NULL==fgets(buf,300,in))
+      {
+          gmx_fatal(FARGS,"Error reading Gaussian output");
+      }
+#ifdef GMX_DOUBLE
+      sscanf(buf,"%lf %lf %lf\n",
+	     &MMgrad[i][XX],
+	     &MMgrad[i][YY],
+	     &MMgrad[i][ZZ]);
+#else
+      sscanf(buf,"%f %f %f\n",
+	     &MMgrad[i][XX],
+	     &MMgrad[i][YY],
+	     &MMgrad[i][ZZ]);
+#endif	
+    }
+  }
+  fclose(in);
+  return(QMener);  
+}
+
+real read_gaussian_SH_output(rvec QMgrad[],rvec MMgrad[],int step,
+			     gmx_bool swapped,t_QMrec *qm, t_MMrec *mm,real *DeltaE)
+{
+  int
+    i;
+  char
+    buf[300];
+  real
+    QMener;
+  FILE
+    *in;
+  
+  in=fopen("fort.7","r");
+  /* first line is the energy and in the case of CAS, the energy
+   * difference between the two states.
+   */
+  if(NULL == fgets(buf,300,in))
+  {
+      gmx_fatal(FARGS,"Error reading Gaussian output");
+  }
+
+#ifdef GMX_DOUBLE
+  sscanf(buf,"%lf %lf\n",&QMener,DeltaE);
+#else
+  sscanf(buf,"%f %f\n",  &QMener,DeltaE);
+#endif
+  
+  /* switch on/off the State Averaging */
+  
+  if(*DeltaE > qm->SAoff){
+    if (qm->SAstep > 0){
+      qm->SAstep--;
+    }
+  }
+  else if (*DeltaE < qm->SAon || (qm->SAstep > 0)){
+    if (qm->SAstep < qm->SAsteps){
+      qm->SAstep++;
+    }
+  }
+  
+  /* for debugging: */
+  fprintf(stderr,"Gap = %5f,SA = %3d\n",*DeltaE,(qm->SAstep>0));
+  /* next lines contain the gradients of the QM atoms */
+  for(i=0;i<qm->nrQMatoms;i++){
+    if(NULL==fgets(buf,300,in))
+    {
+	gmx_fatal(FARGS,"Error reading Gaussian output");
+    }
+
+#ifdef GMX_DOUBLE
+    sscanf(buf,"%lf %lf %lf\n",
+	   &QMgrad[i][XX],
+	   &QMgrad[i][YY],
+	   &QMgrad[i][ZZ]);
+#else
+    sscanf(buf,"%f %f %f\n",
+	   &QMgrad[i][XX],
+	   &QMgrad[i][YY],
+	   &QMgrad[i][ZZ]);
+#endif     
+  }
+  /* the next lines, are the gradients of the MM atoms */
+  
+  for(i=0;i<mm->nrMMatoms;i++){
+    if(NULL==fgets(buf,300,in))
+    {
+	gmx_fatal(FARGS,"Error reading Gaussian output");
+    }
+#ifdef GMX_DOUBLE
+    sscanf(buf,"%lf %lf %lf\n",
+	   &MMgrad[i][XX],
+	   &MMgrad[i][YY],
+	   &MMgrad[i][ZZ]);
+#else
+    sscanf(buf,"%f %f %f\n",
+	   &MMgrad[i][XX],
+	   &MMgrad[i][YY],
+	   &MMgrad[i][ZZ]);
+#endif	
+  }
+  
+  /* the next line contains the two CI eigenvector elements */
+  if(NULL==fgets(buf,300,in))
+  {
+      gmx_fatal(FARGS,"Error reading Gaussian output");
+  }
+  if(!step){
+    sscanf(buf,"%d",&qm->CIdim);
+    snew(qm->CIvec1,qm->CIdim);
+    snew(qm->CIvec1old,qm->CIdim);
+    snew(qm->CIvec2,qm->CIdim);
+    snew(qm->CIvec2old,qm->CIdim);
+  } else {
+    /* before reading in the new current CI vectors, copy the current
+     * CI vector into the old one.
+     */
+    for(i=0;i<qm->CIdim;i++){
+      qm->CIvec1old[i] = qm->CIvec1[i];
+      qm->CIvec2old[i] = qm->CIvec2[i];
+    }
+  }
+  /* first vector */
+  for(i=0;i<qm->CIdim;i++){
+    if(NULL==fgets(buf,300,in))
+    {
+	gmx_fatal(FARGS,"Error reading Gaussian output");
+    }
+#ifdef GMX_DOUBLE
+    sscanf(buf,"%lf\n",&qm->CIvec1[i]);
+#else
+    sscanf(buf,"%f\n", &qm->CIvec1[i]);   
+#endif
+  }
+  /* second vector */
+  for(i=0;i<qm->CIdim;i++){
+    if(NULL==fgets(buf,300,in))
+    {
+	gmx_fatal(FARGS,"Error reading Gaussian output");
+    }
+#ifdef GMX_DOUBLE
+    sscanf(buf,"%lf\n",&qm->CIvec2[i]);
+#else
+    sscanf(buf,"%f\n", &qm->CIvec2[i]);   
+#endif
+  }
+  fclose(in);
+  return(QMener);  
+}
+
+real inproduct(real *a, real *b, int n)
+{
+  int
+    i;
+  real
+    dot=0.0;
+  
+  /* computes the inner product between two vectors (a.b), both of
+   * which have length n.
+   */  
+  for(i=0;i<n;i++){
+    dot+=a[i]*b[i];
+  }
+  return(dot);
+}
+
+int hop(int step, t_QMrec *qm)
+{
+  int
+    swap = 0;
+  real
+    d11=0.0,d12=0.0,d21=0.0,d22=0.0;
+  
+  /* calculates the inproduct between the current Ci vector and the
+   * previous CI vector. A diabatic hop will be made if d12 and d21
+   * are much bigger than d11 and d22. In that case hop returns true,
+   * otherwise it returns false.
+   */  
+  if(step){ /* only go on if more than one step has been done */
+    d11 = inproduct(qm->CIvec1,qm->CIvec1old,qm->CIdim);
+    d12 = inproduct(qm->CIvec1,qm->CIvec2old,qm->CIdim);
+    d21 = inproduct(qm->CIvec2,qm->CIvec1old,qm->CIdim);
+    d22 = inproduct(qm->CIvec2,qm->CIvec2old,qm->CIdim);
+  }
+  fprintf(stderr,"-------------------\n");
+  fprintf(stderr,"d11 = %13.8f\n",d11);
+  fprintf(stderr,"d12 = %13.8f\n",d12);
+  fprintf(stderr,"d21 = %13.8f\n",d21);
+  fprintf(stderr,"d22 = %13.8f\n",d22);
+  fprintf(stderr,"-------------------\n");
+  
+  if((fabs(d12)>0.2)&&(fabs(d21)>0.2))
+    swap = 1;
+  
+  return(swap);
+}
+
+void do_gaussian(int step,char *exe)
+{
+  char
+    buf[100];
+
+  /* make the call to the gaussian binary through system()
+   * The location of the binary will be picked up from the 
+   * environment using getenv().
+   */
+  if(step) /* hack to prevent long inputfiles */
+    sprintf(buf,"%s < %s > %s",
+	    exe,
+	    "input.com",
+	    "input.log");
+  else
+    sprintf(buf,"%s < %s > %s",
+	    exe,
+            "input.com",
+	    "input.log");
+//  fprintf(stderr,"Calling '%s'\n",buf);
+#ifdef GMX_NO_SYSTEM
+  printf("Warning-- No calls to system(3) supported on this platform.");
+  gmx_fatal(FARGS,"Call to '%s' failed\n",buf);
+#else
+  if ( system(buf) != 0 )
+    gmx_fatal(FARGS,"Call to '%s' failed\n",buf);
+#endif
+}
+
+real call_gaussian(t_commrec *cr,  t_forcerec *fr, 
+		   t_QMrec *qm, t_MMrec *mm, rvec f[], rvec fshift[])
+{
+  /* normal gaussian jobs */
+  static int
+    step=0;
+  int
+    i,j;
+  real
+    QMener=0.0;
+  rvec
+    *QMgrad,*MMgrad;
+  char
+    *exe;
+  
+  snew(exe,30);
+  sprintf(exe,"%s/%s",qm->gauss_dir,qm->gauss_exe);
+  snew(QMgrad,qm->nrQMatoms);
+  snew(MMgrad,mm->nrMMatoms);
+
+  write_gaussian_input(step,fr,qm,mm);
+  do_gaussian(step,exe);
+  QMener = read_gaussian_output(QMgrad,MMgrad,step,qm,mm);
+  /* put the QMMM forces in the force array and to the fshift
+   */
+  for(i=0;i<qm->nrQMatoms;i++){
+    for(j=0;j<DIM;j++){
+      f[i][j]      = HARTREE_BOHR2MD*QMgrad[i][j];
+      fshift[i][j] = HARTREE_BOHR2MD*QMgrad[i][j];
+    }
+  }
+  for(i=0;i<mm->nrMMatoms;i++){
+    for(j=0;j<DIM;j++){
+      f[i+qm->nrQMatoms][j]      = HARTREE_BOHR2MD*MMgrad[i][j];      
+      fshift[i+qm->nrQMatoms][j] = HARTREE_BOHR2MD*MMgrad[i][j];
+    }
+  }
+  QMener = QMener*HARTREE2KJ*AVOGADRO;
+  step++;
+  free(exe);
+  return(QMener);
+
+} /* call_gaussian */
+
+int QEDhop(t_commrec *cr,t_QMrec *qm,double *eigvec, int ndim,double *eigval){      
+
+  double
+    d11,d12,d21,d22,gap_up=0.0,gap_down=0.0;
+  int
+    doprint=0,i,k,current,above,below,hop_up=0,hop_down=0;
+  current=qm->polariton;
+  below = current-1;
+  above = current+1;
+  if(MULTISIM(cr)){
+    if(MASTERSIM(cr->ms)){
+      doprint = 1;
+    }
+  }
+  else{
+    doprint = 1;
+  }
+ 
+  if ( below >= 0){
+    /* look down first */
+    d11=0.0;
+    d12=0.0;
+    d21=0.0;
+    d22=0.0;
+    for (k=0;k<ndim;k++){
+      d11+=eigvec[current*ndim+k]*(qm->eigvec[current*ndim+k]);
+      d12+=eigvec[current*ndim+k]*(qm->eigvec[below*ndim+k]);
+      d21+=eigvec[below*ndim+k]*(qm->eigvec[current*ndim+k]);
+      d22+=eigvec[below*ndim+k]*(qm->eigvec[below*ndim+k]);
+    }
+    
+    if(doprint){  
+      fprintf(stderr,"Overlap for %d down to %d\n",current,below);
+      fprintf(stderr,"-------------------\n");
+      fprintf(stderr,"d11 = %13.8f\n",d11);
+      fprintf(stderr,"d12 = %13.8f\n",d12);
+      fprintf(stderr,"d21 = %13.8f\n",d21);
+      fprintf(stderr,"d22 = %13.8f\n",d22);
+      fprintf(stderr,"-------------------\n");
+    }
+    if(fabs(d12)>0.5){
+//    if ( fabs(d11) < 0.5 ){
+      hop_down = 1;
+      gap_down = eigval[current]-eigval[below];
+    }
+  }
+  if ( above < ndim){
+    /* look up  next */
+    d11=0.0;
+    d12=0.0;
+    d21=0.0;
+    d22=0.0;
+    for (k=0;k<ndim;k++){
+      d11+=eigvec[current*ndim+k]*(qm->eigvec[current*ndim+k]);
+      d12+=eigvec[current*ndim+k]*(qm->eigvec[above*ndim+k]);
+      d21+=eigvec[above*ndim+k]*(qm->eigvec[current*ndim+k]);
+      d22+=eigvec[above*ndim+k]*(qm->eigvec[above*ndim+k]);
+    }
+    if(doprint){
+      fprintf(stderr,"Overlap for %d up to %d\n",current,above);
+      fprintf(stderr,"-------------------\n");
+      fprintf(stderr,"d11 = %13.8f\n",d11);
+      fprintf(stderr,"d12 = %13.8f\n",d12);
+      fprintf(stderr,"d21 = %13.8f\n",d21);
+      fprintf(stderr,"d22 = %13.8f\n",d22);
+      fprintf(stderr,"-------------------\n");
+    }  
+    if(fabs(d12)>0.5){
+//    if( fabs(d11) < 0.5 ){
+      hop_up = 1;
+      gap_up = eigval[above]-eigval[current];
+    }
+  }
+  /* we bias towards down hops. Not sure if this is bad... 
+   */
+  if ( hop_down && (gap_down < qm->SAon) ){
+    if (doprint){
+      fprintf (stderr,"hopping from state %d to state %d\n",current,below);
+    }
+    current=below;
+  }
+/*
+  else if (hop_up && (gap_up < qm->SAon) ){
+    if (doprint){
+      fprintf (stderr,"hopping from state %d to state %d\n",current,above);
+    }
+    current=above;
+  }
+*/
+  /* copy the current vectors to the old vectors!
+   */
+  for(i=0;i<ndim*ndim;i++){
+    qm->eigvec[i]=eigvec[i];
+  }
+  return (current);
+}
+
+
+void get_dipole_gradients(t_QMrec *qm, rvec E,rvec tdmgrad[],rvec tdm)
+{
+  real
+    tm,mm,*mass=NULL;
+  real 
+    *w_rls=NULL;
+  int
+    i,j,k,l;
+  rvec
+    *xcopy,xcm,xrefcm,Erot,*tdmgrad_rot=NULL,*xfit;
+  static int step=0;
+  matrix
+    R,Rinv,box;
+  t_atoms
+    *atoms=NULL;
+  FILE
+   *in;
+  char 
+    *buf,*tdmfile,*reffile,*reftitle;
+  /* did not want to link atoms struct all way through, so do it luke this 
+   * instead
+   */
+  if(!step){
+    snew(buf,4000);
+    snew(tdmfile,4000);
+    snew(reffile,4000);
+    snew(reftitle,4000);
+    buf=getenv("TDM_FILE");
+    if(buf)
+      sscanf(buf,"%s",tdmfile);
+    else
+      gmx_fatal(FARGS,"no $TDM_FILE\nthis file (including path) contains the natoms TDM gradients in xyz format\nThe last line is the reference TDM\n");
+     
+    buf=getenv("REF_FILE");
+    if(buf)
+      sscanf(buf,"%s",reffile);
+    else
+      gmx_fatal(FARGS,"no $REF_FILE\nthis gro file (including path) contains the reference structure for which the TDM is known\n");
+
+
+    snew(qm->xref,qm->nrQMatoms);
+    snew(atoms,1);
+    init_t_atoms(atoms,qm->nrQMatoms,0);
+    read_stx_conf(reffile,reftitle,atoms,qm->xref,NULL,NULL,box);
+    fprintf(stderr,"picking up TDM gradients (au) from file %s\n",tdmfile);
+    /* last line contains the reference dipole moment */
+    snew(qm->tdmXgrad,qm->nrQMatoms);
+    snew(qm->tdmYgrad,qm->nrQMatoms);
+
+    snew(qm->tdmZgrad,qm->nrQMatoms);
+
+    in=fopen(tdmfile,"r");
+    for(i=0;i<qm->nrQMatoms;i++){
+      if(NULL == fgets(buf,3000,in))
+      {
+        gmx_fatal(FARGS,"Error reading TDM gradient file");
+      }
+#ifdef GMX_DOUBLE
+      sscanf(buf,"%lf %lf %lf %lf %lf %lf %lf %lf %lf\n",
+           &qm->tdmXgrad[i][XX],
+           &qm->tdmXgrad[i][YY],
+           &qm->tdmXgrad[i][ZZ],
+           &qm->tdmYgrad[i][XX],
+           &qm->tdmYgrad[i][YY],
+           &qm->tdmYgrad[i][ZZ],
+           &qm->tdmZgrad[i][XX],
+           &qm->tdmZgrad[i][YY],
+           &qm->tdmZgrad[i][ZZ]);
+#else
+      sscanf(buf,"%f %f %f %f %f %f %f %f %f\n",
+           &qm->tdmXgrad[i][XX],
+           &qm->tdmXgrad[i][YY],
+           &qm->tdmXgrad[i][ZZ],
+           &qm->tdmYgrad[i][XX],
+           &qm->tdmYgrad[i][YY],
+           &qm->tdmYgrad[i][ZZ],
+           &qm->tdmZgrad[i][XX],
+           &qm->tdmZgrad[i][YY],
+           &qm->tdmZgrad[i][ZZ]);
+#endif
+    /* compile the gradients of mu.E wrt the atom positions */
+
+ 
+    }
+    /* pick up ref TDM at the last line of the file */
+    if(NULL == fgets(buf,3000,in))
+    {
+        gmx_fatal(FARGS,"Error reading TDM gradient file");
+    }
+#ifdef GMX_DOUBLE
+    sscanf(buf,"%lf %lf %lf\n",
+           &qm->tdm[XX],
+           &qm->tdm[YY],
+           &qm->tdm[ZZ]);
+#else
+    sscanf(buf,"%f %f %f\n",
+           &qm->tdm[XX],
+           &qm->tdm[YY],
+           &qm->tdm[ZZ]);
+#endif
+    fclose(in);
+//    free(buf);
+    free (reffile);
+    free(reftitle);
+    free(tdmfile);
+  }
+  /* Hardcode... */   
+  snew(mass,100);
+  mass[1]=1.008;
+  mass[6]=12.01;
+  mass[7]=14.01;
+  mass[8]=16;
+  snew(w_rls,qm->nrQMatoms);
+  snew(xcopy,qm->nrQMatoms);
+   
+  for (i=0;i<qm->nrQMatoms;i++){
+    
+    mm=mass[qm->atomicnumberQM[i]];
+    tm+=mm;
+    w_rls[i]=mm;
+    for(j=0;j<DIM;j++){
+      xrefcm[j]+= mm*qm->xref[i][j];
+      xcm[j]+= mm*qm->xQM[i][j];
+      xcopy[i][j]=qm->xQM[i][j];
+    }
+  }
+  for(j=0;j<DIM;j++){
+    xcm[j] /= tm;
+    xrefcm[j] /= tm;
+  }
+  for(i=0;i<qm->nrQMatoms;i++){
+    rvec_dec(xcopy[i],xcm);
+    rvec_dec(qm->xref[i],xrefcm);
+  }
+//  fprintf(stderr,"x[0]    : %lf,%lf%lf\n",qm->xQM[0][0],qm->xQM[0][1],qm->xQM[0][2]);
+//  fprintf(stderr,"xcopy[0]: %lf,%lf%lf\n",xcopy[0][0],xcopy[0][1],xcopy[0][2]);
+  calc_fit_R(3,qm->nrQMatoms,w_rls,qm->xref,xcopy,R);
+  transpose(R,Rinv);
+  /* rotate the field */
+  for (j=0;j<DIM;j++){
+    Erot[j]=0;
+    for(k=0;k<DIM;k++){
+      Erot[j]+=R[j][k]*E[k];
+    }
+  }
+//  fprintf(stderr, "rotated field: %lf %lf %lf\n",Erot[XX],Erot[YY],Erot[ZZ]);
+  /* calculate the gradient in the rotated frame */
+  snew(tdmgrad_rot,qm->nrQMatoms);
+  for(i=0;i<qm->nrQMatoms;i++){
+    for(j=0;j<DIM;j++){
+      tdmgrad_rot[i][j]=qm->tdmXgrad[i][j]*Erot[XX]+qm->tdmYgrad[i][j]*Erot[YY]+qm->tdmZgrad[i][j]*Erot[ZZ];
+    }
+  }
+  /* calculate the TDM in the rotated field */
+  snew(xfit,qm->nrQMatoms);
+  for (j=0;j<qm->nrQMatoms;j++){
+    for(k=0;k<DIM;k++){
+      
+      xfit[j][k]=0;
+      for (l=0;l<DIM;l++){
+        xfit[j][k]+=R[k][l]*xcopy[j][l];
+      }
+    }
+  }
+//  fprintf(stderr,"xfit[0] : %lf,%lf,%lf\n",xfit[0][0],xfit[0][1],xfit[0][2]);
+//  fprintf(stderr,"rref[0] : %lf,%lf,%lf\n",qm->xref[0][0],qm->xref[0][1],qm->xref[0][2]);
+  for(k=0;k<DIM;k++){
+   tdm[k]=qm->tdm[k];
+  }
+  for(j=0;j<qm->nrQMatoms;j++){
+    for(k=0;k<DIM;k++){
+      tdm[XX]+=qm->tdmXgrad[j][k]*(xfit[j][k]-qm->xref[j][k]);
+      tdm[YY]+=qm->tdmYgrad[j][k]*(xfit[j][k]-qm->xref[j][k]);
+      tdm[ZZ]+=qm->tdmZgrad[j][k]*(xfit[j][k]-qm->xref[j][k]);
+    }
+  }
+  free(xfit);
+  /* rotate back the TDM */
+  rvec tdm_R;
+  for (j=0;j<DIM;j++){
+    for (k=0;k<DIM;k++){
+      tdm_R[j]+=Rinv[j][k]*tdm[k];
+    }
+  }
+  for (j=0;j<DIM;j++){
+    tdm[j]=tdm_R[j];
+  }
+
+
+  /* rotate back the gradients */
+  for (i=0;i<qm->nrQMatoms;i++){
+    for (j=0;j<DIM;j++){
+      tdmgrad[i][j]=0;
+      for(k=0;k<DIM;k++){
+        tdmgrad[i][j]+=Rinv[j][k]*tdmgrad_rot[i][k];
+      }
+    }
+  }
+  free(tdmgrad_rot);
+  /* I suppose there should be another gradient to try and allign dipole
+   */
+  free(w_rls);
+  free(xcopy);
+  free(mass);
+  step++;
+} /* get_dipole_gradients */
+
+real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr, 
+		   t_QMrec *qm, t_MMrec *mm, rvec f[], rvec fshift[])
+{
+  /* multiple gaussian jobs for QED */
+  static int
+    step=0;
+  int
+    i,j=0,k,m,ndim;
+  double
+    QMener=0.0,*energies,Eground,c,csq;
+  rvec
+    *QMgrad_S0,*MMgrad_S0,*QMgrad_S1,*MMgrad_S1,tdm,*tdmgrad;
+  char
+    *exe,*eigenvectorfile,*energyfile;
+  double
+    *matrix=NULL,*tmp=NULL,*couplings=NULL;
+  double
+    *eigval,*eigvec;
+  int
+    dodia=1;
+  FILE
+    *evout=NULL,*enerout=NULL;;
+  snew(exe,3000);
+  sprintf(exe,"%s/%s",qm->gauss_dir,qm->gauss_exe);
+  snew(eigenvectorfile,3000);
+  sprintf(eigenvectorfile,"%s/eigenvectors.dat",qm->work_dir);
+  /*  excited state forces */
+  snew(QMgrad_S1,qm->nrQMatoms);
+  snew(MMgrad_S1,mm->nrMMatoms);
+  /* ground state forces */
+  snew(QMgrad_S0,qm->nrQMatoms);
+  snew(MMgrad_S0,mm->nrMMatoms);
+  snew(tdmgrad,qm->nrQMatoms);
+  write_gaussian_input_QED(cr,step,fr,qm,mm);
+  /* we use the script to use molcas */
+  do_gaussian(step,exe);
+  QMener = read_gaussian_output_QED(cr,QMgrad_S1,MMgrad_S1,QMgrad_S0,MMgrad_S0,
+				    step,qm,mm,&tdm,tdmgrad,&Eground);
+
+  if(MULTISIM(cr)){
+    ndim=cr->ms->nsim+1;
+    m=cr->ms->sim;
+  }
+  else{
+    ndim =2;
+    m=0;
+  }
+//  fprintf(stderr,"node %d:hv = %lf tdm = %lf %lf %lf\n",m,QMener-Eground,tdm[XX],tdm[YY],tdm[ZZ] );
+  snew(energyfile,3000);
+  sprintf(energyfile,"%s/%s%d.dat",qm->work_dir,"energies",m);
+  enerout=fopen(energyfile,"a");
+  fprintf(enerout,"step %d E(S0): %12.8lf E(S1) %12.8lf TDM: %12.8lf %12.8lf %12.8lf\n",step,Eground, QMener, tdm[XX],tdm[YY],tdm[ZZ]);
+  fclose(enerout);
+
+/* BEGIN HACK to use fitted dipole moments */  
+//  fprintf(stderr, "old TDM: %lf,%lf,%lf",tdm[XX],tdm[YY],tdm[ZZ]);
+//  get_dipole_gradients(qm,qm->E,tdmgrad,tdm);
+//
+//  fprintf(stderr, "| new TDM: %lf,%lf,%lf\n",tdm[XX],tdm[YY],tdm[ZZ]);
+/* END HACK */
+
+
+  snew(energies,ndim);
+  /* on the diagonal there is the excited state energy of the molecule
+     plus the ground state energies of all other molecules
+    */
+  for (i=0;i<ndim;i++){
+    energies[i]=Eground;
+  }
+  energies[m]=QMener; /* the excited state energy, overwrites
+			 the ground state energie */
+  /* send around */
+  if(MULTISIM(cr)){
+    gmx_sumd_sim(ndim,energies,cr->ms);
+  }
+  energies[ndim-1]+=qm->omega; /* the photon energy of the
+				  cavity is added to the
+				  last diagonal, after summing the
+				  ground state energies */
+  
+  /* now we fill up the off-diagonals, basically the dot product of
+     the dipole moment with the E-field component of the
+     cavity/plasmon, assumed to be in Z, which doe not make sens for
+     cavity though... 
+  */
+  snew(couplings,ndim);
+  couplings[m] = iprod(tdm,qm->E);
+  if(MULTISIM(cr)){
+    gmx_sumd_sim(ndim-1,couplings,cr->ms);
+  }
+  /* diagonalize the QED matrix on the masternode, and communicate back
+     the eigen vectors to compute the Hellman Feynman forces
+  */
+  snew(eigval,ndim);
+  snew(eigvec,ndim*ndim);
+
+  if(MULTISIM(cr)){
+    if (!MASTERSIM(cr->ms)){
+      dodia = 0;
+    }
+  }
+  if(dodia){
+//    fprintf(stderr,"\n"); 
+//    fprintf(stderr,"constructing matrix\n");
+    snew(matrix,ndim*ndim);
+    for (i=0;i<ndim;i++){
+      matrix[ndim+(i*ndim)-1]= couplings[i];
+      matrix[ndim*(ndim-1)+i]= couplings[i];
+      matrix[i+(i*ndim)]=energies[i];
+    }
+//    fprintf(stderr,"printing matrix\n");
+    for(i=0;i<ndim;i++){
+//      fprintf(stderr,"\n");
+      for (j = 0 ;j< ndim;j++){
+//	fprintf(stderr," %f ",matrix[j+i*ndim]);
+      }
+    }
+//    fprintf(stderr,"\n\ndiagonalizing matrix\n");
+    eigensolver(matrix,ndim,0,ndim,eigval,eigvec);
+//    evout=fopen(eigenvectorfile,"a");
+//    evout=fopen("eigenvectors.dat","a");
+//    for( i = 0 ; i < ndim; i++)
+//    {
+//      fprintf(evout,"step %d Eigenvector %d:",step,i);
+//      for (k=0;k<ndim;k++)
+//      {
+//        fprintf(evout," %12.8lf",eigvec[i*ndim+k]);
+//      }
+//      fprintf(evout,"\n");
+//    }
+    fprintf(stderr,"step %d Eigenvalues: ",step);
+    for ( i = 0 ; i<ndim;i++){
+      fprintf(stderr,"%lf ",eigval[i]);
+    }
+    fprintf(stderr,"\n");
+//    fclose (evout);
+  }
+    
+  /* send the eigenvalues and eigenvectors around 
+   */
+  if(MULTISIM(cr)){
+    gmx_sumd_sim(ndim*ndim,eigvec ,cr->ms);
+    gmx_sumd_sim(ndim,eigval,cr->ms);
+  }
+  /* decide if we want to hop */
+  qm->polariton = QEDhop(cr,qm,eigvec,ndim,eigval);
+  if(dodia){
+    evout=fopen(eigenvectorfile,"a");
+    i  = qm->polariton;
+    fprintf(evout,"step %d Eigenvector %d:",step,i);
+    for (k=0;k<ndim;k++)
+    {
+      fprintf(evout," %12.8lf",eigvec[i*ndim+k]);
+    }
+    fprintf(evout,"\n");
+    fclose(evout);
+  }
+  /* compute Hellman Feynman forces. Now also with dipole derivative
+   * first the diagonals, these are easy:
+   */
+  
+  for (k=0;k<ndim;k++){
+    c=eigvec[qm->polariton*ndim+k];
+    csq = c*c;
+    if ( k == m ){ /* this molecule (m) is excited */
+      for(i=0;i<qm->nrQMatoms;i++){
+        for(j=0;j<DIM;j++){
+          f[i][j]      += csq*HARTREE_BOHR2MD*QMgrad_S1[i][j];
+          fshift[i][j] += csq*HARTREE_BOHR2MD*QMgrad_S1[i][j];
+        }
+      }
+      for(i=0;i<mm->nrMMatoms;i++){
+        for(j=0;j<DIM;j++){
+          f[i+qm->nrQMatoms][j]      += csq*HARTREE_BOHR2MD*MMgrad_S1[i][j];
+          fshift[i+qm->nrQMatoms][j] += csq*HARTREE_BOHR2MD*MMgrad_S1[i][j];
+        }
+      }
+    }
+    else { /* this molecule (m) is in the ground state */
+      for(i=0;i<qm->nrQMatoms;i++){
+        for(j=0;j<DIM;j++){
+          f[i][j]      += csq*HARTREE_BOHR2MD*QMgrad_S0[i][j];
+          fshift[i][j] += csq*HARTREE_BOHR2MD*QMgrad_S0[i][j];
+        }
+      }
+      for(i=0;i<mm->nrMMatoms;i++){
+        for(j=0;j<DIM;j++){
+          f[i+qm->nrQMatoms][j]      += csq*HARTREE_BOHR2MD*MMgrad_S0[i][j];
+          fshift[i+qm->nrQMatoms][j] += csq*HARTREE_BOHR2MD*MMgrad_S0[i][j];
+        }
+      }
+    }
+  }
+  /* the off-diagonals c_i c_ndim d/dx mu. These only exist for the 
+   * QMatoms, as the MM is not polarizable. */
+  /* not sure about the sign here.... the factor 2 is because there
+   * are two terms: m,N+1 and N_1,m */ 
+  csq = eigvec[qm->polariton*ndim+m]*eigvec[qm->polariton*ndim+ndim-1];
+/* COMMENTED OUT GG */
+//  get_dipole_gradients(qm,qm->E,tdmgrad);
+
+
+          
+  for(i=0;i<qm->nrQMatoms;i++){
+//  fprintf(stderr,"Atom %d\nEnergy gradient: %8.5lf %8.5lf %8.5lf\nDipole gradient: %8.5lf %8.5lf %8.5lf\n",i,f[i][0],f[i][1],f[i][2],2*csq*HARTREE_BOHR2MD*tdmgrad[i][0],2*csq*HARTREE_BOHR2MD*tdmgrad[i][1],2*csq*HARTREE_BOHR2MD*tdmgrad[i][2]);
+    for (k=0;j<DIM;j++){
+      f[i][j]      += 2*csq*HARTREE_BOHR2MD*tdmgrad[i][j];
+      fshift[i][j] += 2*csq*HARTREE_BOHR2MD*tdmgrad[i][j];
+    }
+  } 
+  QMener = eigval[qm->polariton]*HARTREE2KJ*AVOGADRO;
+  step++;
+  free(exe);
+  free(eigenvectorfile);
+  free(energyfile);
+  free (MMgrad_S0);
+  free (QMgrad_S1);
+  free (MMgrad_S1);
+  free (QMgrad_S0);
+  free (tdmgrad); 
+  free (couplings);
+  free (matrix);
+  free (eigval);
+  free (eigvec);
+  free(energies);
+  return(QMener);
+
+} /* call_gaussian_QED */
+
+
+real call_gaussian_SH(t_commrec *cr, t_forcerec *fr, t_QMrec *qm, t_MMrec *mm, 
+		      rvec f[], rvec fshift[])
+{ 
+  /* a gaussian call routine intended for doing diabatic surface
+   * "sliding". See the manual for the theoretical background of this
+   * TSH method.  
+   */
+  static int
+    step=0;
+  int
+    state,i,j;
+  real
+    QMener=0.0;
+  static  gmx_bool
+    swapped=FALSE; /* handle for identifying the current PES */
+  gmx_bool
+    swap=FALSE; /* the actual swap */
+  rvec
+    *QMgrad,*MMgrad;
+  char
+    *buf;
+  char
+    *exe;
+  real
+    deltaE = 0.0;
+  
+  snew(exe,30);
+  sprintf(exe,"%s/%s",qm->gauss_dir,qm->gauss_exe);
+  /* hack to do ground state simulations */
+  if(!step){
+    snew(buf,20);
+    buf = getenv("STATE");
+    if (buf)
+      sscanf(buf,"%d",&state);
+    else
+      state=2;
+    if(state==1)
+      swapped=TRUE;
+  }
+  /* end of hack */
+
+
+  /* copy the QMMMrec pointer */
+  snew(QMgrad,qm->nrQMatoms);
+  snew(MMgrad,mm->nrMMatoms);
+  /* at step 0 there should be no SA */
+  /*  if(!step)
+   * qr->bSA=FALSE;*/
+  /* temporray set to step + 1, since there is a chk start */
+  write_gaussian_SH_input(step,swapped,fr,qm,mm);
+
+  do_gaussian(step,exe);
+  QMener = read_gaussian_SH_output(QMgrad,MMgrad,step,swapped,qm,mm,&deltaE);
+
+  /* check for a surface hop. Only possible if we were already state
+   * averaging.
+   */
+  if(qm->SAstep>0 && deltaE < 0.01){
+    if(!swapped){
+      swap    = (step && hop(step,qm));
+      swapped = swap;
+    } 
+    else { /* already on the other surface, so check if we go back */
+      swap    = (step && hop(step,qm));
+      swapped =!swap; /* so swapped shoud be false again */
+    }
+    if (swap){/* change surface, so do another call */
+      write_gaussian_SH_input(step,swapped,fr,qm,mm);
+      do_gaussian(step,exe);
+      QMener = read_gaussian_SH_output(QMgrad,MMgrad,step,swapped,qm,mm,&deltaE);
+    }
+  }
+  /* add the QMMM forces to the gmx force array and fshift
+   */
+  for(i=0;i<qm->nrQMatoms;i++){
+    for(j=0;j<DIM;j++){
+      f[i][j]      = HARTREE_BOHR2MD*QMgrad[i][j];
+      fshift[i][j] = HARTREE_BOHR2MD*QMgrad[i][j];
+    }
+  }
+  for(i=0;i<mm->nrMMatoms;i++){
+    for(j=0;j<DIM;j++){
+      f[i+qm->nrQMatoms][j]      = HARTREE_BOHR2MD*MMgrad[i][j];
+      fshift[i+qm->nrQMatoms][j] = HARTREE_BOHR2MD*MMgrad[i][j];
+    }
+  }
+  QMener = QMener*HARTREE2KJ*AVOGADRO;
+  fprintf(stderr,"step %5d, SA = %5d, swap = %5d\n",
+	  step,(qm->SAstep>0),swapped);
+  step++;
+  free(exe);
+  return(QMener);
+
+} /* call_gaussian_SH */
+    
+/* end of gaussian sub routines */
+
+#else
+int
+gmx_qmmm_gaussian_empty;
+#endif
+
