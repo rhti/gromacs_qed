@@ -3241,11 +3241,7 @@ double HF_forces(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double
     bp_ap = conj(eigvec[p*ndim+m])*a_sum;	// (beta_p)*(sum_of alphas_p)
     ap_bp = eigvec[p*ndim+m]*conj(a_sum);	//(sum_of alphas_p)*beta_p
 
-    //added for assessing whether gradients are complex
-    //dplx F;
-
     for(i=0;i<qm->nrQMatoms;i++){
-//      F=0.0+IMAG*0.0;
       for(j=0;j<DIM;j++){
 	/* diagonal term */
 	//fij =(betasq*QMgrad_S1[i][j]+(1-betasq)*QMgrad_S0[i][j]);
@@ -3256,13 +3252,9 @@ double HF_forces(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double
 	fij+= (bp_ap+ap_bp)*tdmZ[i][j]*u[2];
 	fij*=HARTREE_BOHR2MD*csq;
 
-//	fprintf(stderr,"From the HF forces, diagonal (p=q) terms, fij=%lf+%lfI\n",creal(fij),cimag(fij));
-//	F+=fij;
-
 	f[i][j]      += creal(fij);
 	fshift[i][j] += creal(fij);
       }
-//      fprintf(stderr,"From the HF forces, diagonal (p=q) terms, F=%lf+%lfI\n",creal(F),cimag(F));
     }
     for(i=0;i<mm->nrMMatoms;i++){
       for(j=0;j<DIM;j++){
@@ -3299,7 +3291,6 @@ double HF_forces(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double
       ap_bq = eigvec[q*ndim+m]*conj(a_sum); 
 
       for(i=0;i<qm->nrQMatoms;i++){
-//        F=0.0+IMAG*0.0;
 	for(j=0;j<DIM;j++){
 	  /* diagonal term */
 	  fij = (csq*betasq+csq2*betasq2)*(QMgrad_S1[i][j]-QMgrad_S0[i][j]);
@@ -3309,13 +3300,9 @@ double HF_forces(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double
 	  fij+= (csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmZ[i][j]*u[2];
 	  fij*=HARTREE_BOHR2MD;
 
-//	  fprintf(stderr,"From the FH forces, in the off-diagonal (p!=q) terms fij=%lf+%lfI\n",creal(fij),cimag(fij));
-//	  F+=fij;
-
 	  f[i][j]      += creal(fij);
 	  fshift[i][j] += creal(fij);
 	}
-//	fprintf(stderr,"From the HF forces, off-diagonal (p!=q) terms, F=%lf+%lfI\n",creal(F),cimag(F));
       }
       for(i=0;i<mm->nrMMatoms;i++){
 	for(j=0;j<DIM;j++){
@@ -3415,8 +3402,6 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
     *eigval,*tmp=NULL,L_au=qm->L*microM2BOHR,decay,asq;
   dplx
     *eigvec,*matrix=NULL,*couplings=NULL;
-///  double
-///    *eigvec_real,*eigvec_imag,*send_couple_real,*send_couple_imag;
   double
     *eigvec_real,*eigvec_imag,*send_couple;
   int
@@ -3519,16 +3504,12 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
     couplings[m*(qm->n_max-qm->n_min+1)+i] = iprod(tdm,u)*sqrt(cavity_dispersion(qm->n_min+i,qm)/V0_2EP)*cexp(-IMAG*2*M_PI*(qm->n_min+i)/L_au*qm->z[m]);
   }
   /* send couplings around */
-///  snew(send_couple_real,nmol*(qm->n_max-qm->n_min+1));
-///  snew(send_couple_imag,nmol*(qm->n_max-qm->n_min+1));
   snew(send_couple,2*nmol*(qm->n_max-qm->n_min+1));
   for (i=0;i<nmol*(qm->n_max-qm->n_min+1);i++){
     send_couple[i]=creal(couplings[i]);
     send_couple[nmol*(qm->n_max-qm->n_min+1)+i]=cimag(couplings[i]);
   }
   if(MULTISIM(cr)){
-///    gmx_sumd_sim(nmol*(qm->n_max-qm->n_min+1),send_couple_real,cr->ms);
-///    gmx_sumd_sim(nmol*(qm->n_max-qm->n_min+1),send_couple_imag,cr->ms);
     gmx_sumd_sim(2*nmol*(qm->n_max-qm->n_min+1),send_couple,cr->ms);
   }
   for (i=0;i<nmol*(qm->n_max-qm->n_min+1);i++){
@@ -3567,8 +3548,6 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
 	matrix[ndim*nmol+k+(j*ndim)]= conj(couplings[k*(qm->n_max-qm->n_min+1)+j]);
       }
     }
-//    fprintf(stderr,"Matrix elements:\n");
-//    printM_complex(ndim,matrix);
 
     fprintf(stderr,"\n\ndiagonalizing matrix\n");
     diag(ndim,eigval,eigvec,matrix);
@@ -3647,9 +3626,6 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
     qm->eigvec[i]=eigvec[i];
   }
 
-//  fprintf(stderr,"\n\nEigenvector elements:\n");
-//  printM_complex(ndim,eigvec);
-
   /* compute Hellman Feynman forces */
   QMener = HF_forces(m,nmol,ndim,eigval,eigvec,u,tdmX,tdmY,tdmZ,tdmXMM,tdmYMM,
 		     tdmZMM,QMgrad_S0,MMgrad_S0,QMgrad_S1,MMgrad_S1,f,fshift,qm,mm,fr);
@@ -3706,7 +3682,6 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
        * Thee will need to be multiplied by the coefficients. 
        */
       for(i=0;i<ndim;i++){
-//	fprintf(evout,"step %d Eigenvector %d (c*c: %lf):",step,i,conj(qm->creal[i]+IMAG*qm->cimag[i])*(qm->creal[i]+IMAG*qm->cimag[i]));
 	fprintf(evout,"step %d Eigenvector %d gap %lf (c*c: %lf ):",step,i,eigval[i]-(qm->groundstate,energies[ndim-1]-cavity_dispersion(qm->n_max,qm)),conj(qm->creal[i]+IMAG*qm->cimag[i])*(qm->creal[i]+IMAG*qm->cimag[i]));
 	for(k=0;k<ndim;k++){
 	  fprintf(evout," %12.8lf+%12.8lfI ",creal(eigvec[i*ndim+k]),cimag(eigvec[i*ndim+k]));
@@ -3778,8 +3753,6 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
   free(tdmYMM);
   free(tdmZMM);
   free(couplings);
-///  free(send_couple_real);
-///  free(send_couple_imag);
   free(send_couple);
   free(eigval);
   free(eigvec);
@@ -3789,7 +3762,6 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
   free(state);
   free (final_eigenvecfile);
   return(QMener);
-
 } /* call_gaussian_QED */
 
 
