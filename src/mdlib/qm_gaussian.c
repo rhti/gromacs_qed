@@ -3181,7 +3181,7 @@ void   propagate_TDSE(int step, t_QMrec *qm, dplx *eigvec, int ndim, double *eig
 }
 
 double cavity_dispersion(int n, t_QMrec *qm){
-  return sqrt(qm->omega*qm->omega+SPEED_OF_LIGHT_AU*SPEED_OF_LIGHT_AU*(2*M_PI*n/(qm->L*microM2BOHR))*(2*M_PI*n/(qm->L*microM2BOHR))/qm->n_index);
+  return sqrt(qm->omega*qm->omega+SPEED_OF_LIGHT_AU*SPEED_OF_LIGHT_AU*(2*M_PI*n/(qm->L*microM2BOHR))*(2*M_PI*n/(qm->L*microM2BOHR))/(qm->n_index*qm->n_index));
 } /* cavity_dispersion */
 
 /* Compute Hellman Feynman forces */
