@@ -3247,9 +3247,9 @@ double HF_forces(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double
 	//fij =(betasq*QMgrad_S1[i][j]+(1-betasq)*QMgrad_S0[i][j]);
 	fij =(betasq*QMgrad_S1[i][j]+asq_bsq*QMgrad_S0[i][j]);
 	/* off-diagonal term, Because coeficients are real: ab = ba*/
-	fij+= (bp_ap+ap_bp)*tdmX[i][j]*u[0];
-	fij+= (bp_ap+ap_bp)*tdmY[i][j]*u[1];
-	fij+= (bp_ap+ap_bp)*tdmZ[i][j]*u[2];
+	fij-= (bp_ap+ap_bp)*tdmX[i][j]*u[0];
+	fij-= (bp_ap+ap_bp)*tdmY[i][j]*u[1];
+	fij-= (bp_ap+ap_bp)*tdmZ[i][j]*u[2];
 	fij*=HARTREE_BOHR2MD*csq;
 
 	f[i][j]      += creal(fij);
@@ -3261,9 +3261,9 @@ double HF_forces(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double
 	/* diagonal terms */
 	fij =(betasq*MMgrad_S1[i][j]+asq_bsq*MMgrad_S0[i][j]);
 	/* off-diagonal term */
-	fij+= (bp_ap+ap_bp)*tdmXMM[i][j]*u[0];
-	fij+= (bp_ap+ap_bp)*tdmYMM[i][j]*u[1];
-	fij+= (bp_ap+ap_bp)*tdmZMM[i][j]*u[2];
+	fij-= (bp_ap+ap_bp)*tdmXMM[i][j]*u[0];
+	fij-= (bp_ap+ap_bp)*tdmYMM[i][j]*u[1];
+	fij-= (bp_ap+ap_bp)*tdmZMM[i][j]*u[2];
 	fij*=HARTREE_BOHR2MD*csq;
           
 	f[i+qm->nrQMatoms][j]      += creal(fij);
@@ -3282,7 +3282,7 @@ double HF_forces(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double
       n=qm->n_min;
       a_sumq = 0.0+IMAG*0.0;
       for (i=0;i<(qm->n_max-qm->n_min+1);i++){
-	a_sumq += eigvec[q*ndim+nmol+i]*sqrt(cavity_dispersion(n++,qm)/V0_2EP)*cexp(-IMAG*2*M_PI*(n-1)*qm->z[m]/(qm->L*microM2BOHR));
+	a_sumq += eigvec[q*ndim+nmol+i]*sqrt(cavity_dispersion(n++,qm)/V0_2EP)*cexp(+IMAG*2*M_PI*(n-1)*qm->z[m]/(qm->L*microM2BOHR));
       }
 
       bp_aq = conj(eigvec[p*ndim+m])*a_sumq;	// (beta_p)*(sum_of alphas_q
@@ -3295,9 +3295,9 @@ double HF_forces(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double
 	  /* diagonal term */
 	  fij = (csq*betasq+csq2*betasq2)*(QMgrad_S1[i][j]-QMgrad_S0[i][j]);
 	  /* off-diagonal term */
-	  fij+= (csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmX[i][j]*u[0];
-	  fij+= (csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmY[i][j]*u[1];
-	  fij+= (csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmZ[i][j]*u[2];
+	  fij-= ((csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmX[i][j]*u[0]);
+	  fij-= ((csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmY[i][j]*u[1]);
+	  fij-= ((csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmZ[i][j]*u[2]);
 	  fij*=HARTREE_BOHR2MD;
 
 	  f[i][j]      += creal(fij);
@@ -3309,9 +3309,9 @@ double HF_forces(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double
 	  /* diagonal term */
 	  fij = (csq*betasq+csq2*betasq2)*(MMgrad_S1[i][j]-MMgrad_S0[i][j]);
 	  /* off-diagonal term */
-	  fij+= (csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmXMM[i][j]*u[0];
-	  fij+= (csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmYMM[i][j]*u[1];
-	  fij+= (csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmZMM[i][j]*u[2];
+	  fij-= ((csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmXMM[i][j]*u[0]);
+	  fij-= ((csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmYMM[i][j]*u[1]);
+	  fij-= ((csq*(bp_aq+ap_bq)+csq2*(aq_bp+bq_ap))*tdmZMM[i][j]*u[2]);
 	  fij*=HARTREE_BOHR2MD;
 
 	  f[i+qm->nrQMatoms][j]      += creal(fij);
@@ -3501,7 +3501,7 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
   u[1]=qm->E[1]/sqrt(iprod(qm->E,qm->E));
   u[2]=qm->E[2]/sqrt(iprod(qm->E,qm->E)); //unit vector in E=Ex*u1+Ey*u2+Ez*u3
   for (i=0;i<(qm->n_max-qm->n_min+1);i++){
-    couplings[m*(qm->n_max-qm->n_min+1)+i] = iprod(tdm,u)*sqrt(cavity_dispersion(qm->n_min+i,qm)/V0_2EP)*cexp(-IMAG*2*M_PI*(qm->n_min+i)/L_au*qm->z[m]);
+    couplings[m*(qm->n_max-qm->n_min+1)+i] = -iprod(tdm,u)*sqrt(cavity_dispersion(qm->n_min+i,qm)/V0_2EP)*cexp(+IMAG*2*M_PI*(qm->n_min+i)/L_au*qm->z[m]);
   }
   /* send couplings around */
   snew(send_couple,2*nmol*(qm->n_max-qm->n_min+1));
@@ -3544,8 +3544,8 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
     }
     for (k=0;k<nmol;k++){
       for (j=0;j<(qm->n_max-qm->n_min+1);j++){
-	matrix[nmol+j+(k*ndim)]= couplings[k*(qm->n_max-qm->n_min+1)+j];
-	matrix[ndim*nmol+k+(j*ndim)]= conj(couplings[k*(qm->n_max-qm->n_min+1)+j]);
+	matrix[nmol+j+(k*ndim)]= conj(couplings[k*(qm->n_max-qm->n_min+1)+j]);
+	matrix[ndim*nmol+k+(j*ndim)]= (couplings[k*(qm->n_max-qm->n_min+1)+j]);
       }
     }
 
