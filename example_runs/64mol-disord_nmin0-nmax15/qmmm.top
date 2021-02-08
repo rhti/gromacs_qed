@@ -1,0 +1,408 @@
+;
+;	File 'topol.top' was generated
+;	By user: onbekend (0)
+;	On host: onbekend
+;	At date: Sat Sep 17 11:35:50 2016
+;
+;	This is your topology file
+;	      molecule
+;
+; Include forcefield parameters
+#include "/scratch/project_2001565/plasmons/rhodamine/ffamber03/ffamber03.itp"
+
+[ moleculetype ]
+; Name            nrexcl
+rhodamine             3
+
+[ atoms ]
+;   nr       type  resnr residue  atom   cgnr     charge       mass  typeB    chargeB      massB
+     1  amber99_3      1    RHO    CA1      1    0.29427      12.01   ; qtot 0.2943
+     2 amber99_38      1    RHO     NA      2  -0.618242      14.01   ; qtot -0.324
+     3 amber99_17      1    RHO   HNA1      3   0.595658      1.008   ; qtot 0.2717
+     4 amber99_17      1    RHO   HNA2      4   0.595658      1.008   ; qtot 0.8673
+     5  amber99_3      1    RHO    CA2      5  -0.440502      12.01   ; qtot 0.4268
+     6 amber99_22      1    RHO    HA2      6   0.206183      1.008   ; qtot 0.633
+     7  amber99_2      1    RHO    CA3      7   0.331366      12.01   ; qtot 0.9644
+     8  amber99_3      1    RHO    CA4      8   0.012189      12.01   ; qtot 0.9766
+     9  amber99_3      1    RHO    CA5      9  -0.242564      12.01   ; qtot 0.734
+    10 amber99_22      1    RHO    HA5     10   0.174589      1.008   ; qtot 0.9086
+    11  amber99_3      1    RHO    CA6     11  -0.336649      12.01   ; qtot 0.572
+    12 amber99_22      1    RHO    HA6     12   0.191996      1.008   ; qtot 0.764
+    13 amber99_44      1    RHO     OB     13  -0.330296         16   ; qtot 0.4337
+    14  amber99_3      1    RHO     CB     14  -0.244453      12.01   ; qtot 0.1892
+    15  amber99_3      1    RHO    CC1     15    0.29427      12.01   ; qtot 0.4835
+    16 amber99_38      1    RHO     NC     16  -0.618242      14.01   ; qtot -0.1348
+    17 amber99_17      1    RHO   HNC1     17   0.595658      1.008   ; qtot 0.4609
+    18 amber99_17      1    RHO   HNC2     18   0.595658      1.008   ; qtot 1.057
+    19  amber99_3      1    RHO    CC2     19  -0.440502      12.01   ; qtot 0.616
+    20 amber99_22      1    RHO    HC2     20   0.206183      1.008   ; qtot 0.8222
+    21  amber99_2      1    RHO    CC3     21   0.331366      12.01   ; qtot 1.154
+    22  amber99_3      1    RHO    CC4     22   0.012189      12.01   ; qtot 1.166
+    23  amber99_3      1    RHO    CC5     23  -0.242564      12.01   ; qtot 0.9232
+    24 amber99_22      1    RHO    HC5     24   0.174589      1.008   ; qtot 1.098
+    25  amber99_3      1    RHO    CC6     25  -0.336649      12.01   ; qtot 0.7612
+    26 amber99_22      1    RHO    HC6     26   0.191996      1.008   ; qtot 0.9532
+    27  amber99_3      1    RHO    CD1     27   0.212663      12.01   ; qtot 1.166
+    28  amber99_3      1    RHO    CD2     28   -0.17416      12.01   ; qtot 0.9917
+    29 amber99_22      1    RHO    HD2     29   0.119336      1.008   ; qtot 1.111
+    30  amber99_3      1    RHO    CD3     30  -0.157172      12.01   ; qtot 0.9538
+    31 amber99_22      1    RHO    HD3     31   0.131562      1.008   ; qtot 1.085
+    32  amber99_3      1    RHO    CD4     32  -0.127248      12.01   ; qtot 0.9581
+    33 amber99_22      1    RHO    HD4     33   0.122299      1.008   ; qtot 1.08
+    34  amber99_3      1    RHO    CD5     34  -0.157172      12.01   ; qtot 0.9233
+    35 amber99_22      1    RHO    HD5     35   0.131562      1.008   ; qtot 1.055
+    36  amber99_3      1    RHO    CD6     36   -0.17416      12.01   ; qtot 0.8807
+    37 amber99_22      1    RHO    HD6     37   0.119336      1.008   ; qtot 1
+    38 LA              1    RHO     LA     38   0.000000      0.000
+
+[ bonds ]
+;  ai    aj funct            c0            c1            c2            c3
+    1     2     5 
+    1     5     5 
+    1    11     5 
+    2     3     5 
+    2     4     5 
+    5     6     5 
+    5     7     5 
+    7     8     5 
+    7    13     5 
+    8     9     5 
+    8    14     5 
+    9    10     5 
+    9    11     5 
+   11    12     5 
+   13    21     5 
+   14    22     5 
+   14    27     1 ; QM/MM
+   15    16     5 
+   15    19     5 
+   15    25     5 
+   16    17     5 
+   16    18     5 
+   19    20     5 
+   19    21     5 
+   21    22     5 
+   22    23     5 
+   23    24     5 
+   23    25     5 
+   25    26     5 
+   27    28     1 
+   27    36     1 
+   28    29     1 
+   28    30     1 
+   30    31     1 
+   30    32     1 
+   32    33     1 
+   32    34     1 
+   34    35     1 
+   34    36     1 
+   36    37     1 
+
+[ pairs ]
+;  ai    aj funct            c0            c1            c2            c3
+    1     8     1 
+    1    10     1 
+    1    13     1 
+    2     6     1 
+    2     7     1 
+    2     9     1 
+    2    12     1 
+    3     5     1 
+    3    11     1 
+    4     5     1 
+    4    11     1 
+    5     9     1 
+    5    12     1 
+    5    14     1 
+    5    21     1 
+    6     8     1 
+    6    11     1 
+    6    13     1 
+    7    10     1 
+    7    11     1 
+    7    19     1 
+    7    22     1 
+    7    27     1 
+    8    12     1 
+    8    21     1 
+    8    23     1 
+    8    28     1 
+    8    36     1 
+    9    13     1 
+    9    22     1 
+    9    27     1 
+   10    12     1 
+   10    14     1 
+   11    14     1 
+   13    14     1 
+   13    15     1 
+   13    20     1 
+   13    23     1 
+   14    19     1 
+   14    24     1 
+   14    25     1 
+   14    29     1 
+   14    30     1 
+   14    34     1 
+   14    37     1 
+   15    22     1 
+   15    24     1 
+   16    20     1 
+   16    21     1 
+   16    23     1 
+   16    26     1 
+   17    19     1 
+   17    25     1 
+   18    19     1 
+   18    25     1 
+   19    23     1 
+   19    26     1 
+   20    22     1 
+   20    25     1 
+   21    24     1 
+   21    25     1 
+   21    27     1 
+   22    26     1 
+   22    28     1 
+   22    36     1 
+   23    27     1 
+   24    26     1 
+   27    31     1 
+   27    32     1 
+   27    35     1 
+   28    33     1 
+   28    34     1 
+   28    37     1 
+   29    31     1 
+   29    32     1 
+   29    36     1 
+   30    35     1 
+   30    36     1 
+   31    33     1 
+   31    34     1 
+   32    37     1 
+   33    35     1 
+   33    36     1 
+   35    37     1 
+
+[ angles ]
+;  ai    aj    ak funct            c0            c1            c2            c3
+    2     1     5     1 
+    2     1    11     1 
+    5     1    11     1 
+    1     2     3     1 
+    1     2     4     1 
+    3     2     4     1 
+    1     5     6     1 
+    1     5     7     1 
+    6     5     7     1 
+    5     7     8     1 
+    5     7    13     1 
+    8     7    13     1 
+    7     8     9     1 
+    7     8    14     1 
+    9     8    14     1 
+    8     9    10     1 
+    8     9    11     1 
+   10     9    11     1 
+    1    11     9     1 
+    1    11    12     1 
+    9    11    12     1 
+    7    13    21     1 
+    8    14    22     1 
+    8    14    27     1 
+   22    14    27     1 
+   16    15    19     1 
+   16    15    25     1 
+   19    15    25     1 
+   15    16    17     1 
+   15    16    18     1 
+   17    16    18     1 
+   15    19    20     1 
+   15    19    21     1 
+   20    19    21     1 
+   13    21    19     1 
+   13    21    22     1 
+   19    21    22     1 
+   14    22    21     1 
+   14    22    23     1 
+   21    22    23     1 
+   22    23    24     1 
+   22    23    25     1 
+   24    23    25     1 
+   15    25    23     1 
+   15    25    26     1 
+   23    25    26     1 
+   14    27    28     1 
+   14    27    36     1 
+   28    27    36     1 
+   27    28    29     1 
+   27    28    30     1 
+   29    28    30     1 
+   28    30    31     1 
+   28    30    32     1 
+   31    30    32     1 
+   30    32    33     1 
+   30    32    34     1 
+   33    32    34     1 
+   32    34    35     1 
+   32    34    36     1 
+   35    34    36     1 
+   27    36    34     1 
+   27    36    37     1 
+   34    36    37     1 
+
+[ dihedrals ]
+;  ai    aj    ak    al funct            c0            c1            c2            c3            c4            c5
+    5     1     2     3     3    aromatic_prop_1
+    5     1     2     4     3    aromatic_prop_1
+   11     1     2     3     3 
+   11     1     2     4     3 
+    2     1     5     6     3    aromatic_prop_1
+    2     1     5     7     3    aromatic_prop_1
+   11     1     5     6     3    aromatic_prop_1
+   11     1     5     7     3    aromatic_prop_1
+    2     1    11     9     3    aromatic_prop_1
+    5     1    11     9     3    aromatic_prop_1
+    2     1    11    12     3 
+    5     1    11    12     3 
+    1     5     7     8     3    aromatic_prop_1
+    1     5     7    13     3    aromatic_prop_1
+    6     5     7     8     3    aromatic_prop_1
+    6     5     7    13     3    aromatic_prop_1
+    5     7     8     9     3    aromatic_prop_1
+    5     7     8    14     3 
+   13     7     8     9     3 
+   13     7     8    14     3 
+    5     7    13    21     3    aromatic_prop_1
+    8     7    13    21     3    aromatic_prop_1
+    7     8     9    10     3    aromatic_prop_1
+    7     8     9    11     3    aromatic_prop_1
+   14     8     9    10     3    aromatic_prop_1
+   14     8     9    11     3    aromatic_prop_1
+    7     8    14    22     3    aromatic_prop_1
+    7     8    14    27     3    aromatic_prop_1
+    9     8    14    22     3    aromatic_prop_1
+    9     8    14    27     3    aromatic_prop_1
+   10     9    11     1     3    aromatic_prop_1
+   10     9    11    12     3    aromatic_prop_1
+    8     9    11     1     3 
+    8     9    11    12     3 
+    7    13    21    19     3    aromatic_prop_1
+    7    13    21    22     3    aromatic_prop_1
+    8    14    22    21     3    aromatic_prop_1
+    8    14    22    23     3    aromatic_prop_1
+   27    14    22    21     3    aromatic_prop_1
+   27    14    22    23     3    aromatic_prop_1
+    8    14    27    36     3     0.0000 30.33400 0.00000 0.00000     0.00000     0.00000;aromatic_prop_1
+   22    14    27    28     3     0.0000 30.33400 0.00000 0.00000     0.00000     0.00000;aromatic_prop_1
+   22    14    27    36     3     0.0000 30.33400 0.00000 0.00000     0.00000     0.00000;aromatic_prop_1
+    8    14    27    28     3    0.0000 30.33400 0.00000 0.00000     0.00000     0.00000 ; 
+   19    15    16    17     3    aromatic_prop_1
+   19    15    16    18     3    aromatic_prop_1
+   25    15    16    17     3 
+   25    15    16    18     3 
+   16    15    19    20     3    aromatic_prop_1
+   16    15    19    21     3    aromatic_prop_1
+   25    15    19    20     3    aromatic_prop_1
+   25    15    19    21     3    aromatic_prop_1
+   16    15    25    23     3    aromatic_prop_1
+   19    15    25    23     3    aromatic_prop_1
+   16    15    25    26     3 
+   19    15    25    26     3 
+   15    19    21    13     3    aromatic_prop_1
+   15    19    21    22     3    aromatic_prop_1
+   20    19    21    13     3    aromatic_prop_1
+   20    19    21    22     3    aromatic_prop_1
+   19    21    22    23     3    aromatic_prop_1
+   13    21    22    14     3 
+   13    21    22    23     3 
+   19    21    22    14     3 
+   14    22    23    24     3    aromatic_prop_1
+   14    22    23    25     3    aromatic_prop_1
+   21    22    23    24     3    aromatic_prop_1
+   21    22    23    25     3    aromatic_prop_1
+   24    23    25    15     3    aromatic_prop_1
+   24    23    25    26     3    aromatic_prop_1
+   22    23    25    15     3 
+   22    23    25    26     3 
+   14    27    28    29     3    aromatic_prop_1
+   14    27    28    30     3    aromatic_prop_1
+   36    27    28    29     3 
+   36    27    28    30     3 
+   14    27    36    34     3    aromatic_prop_1
+   14    27    36    34     3    aromatic_prop_1
+   14    27    36    37     3    aromatic_prop_1
+   14    27    36    37     3    aromatic_prop_1
+   28    27    36    34     3    aromatic_prop_1
+   28    27    36    37     3    aromatic_prop_1
+   27    28    30    31     3    aromatic_prop_1
+   27    28    30    32     3    aromatic_prop_1
+   29    28    30    31     3    aromatic_prop_1
+   29    28    30    32     3    aromatic_prop_1
+   28    30    32    33     3    aromatic_prop_1
+   28    30    32    34     3    aromatic_prop_1
+   31    30    32    33     3    aromatic_prop_1
+   31    30    32    34     3 
+   30    32    34    35     3    aromatic_prop_1
+   30    32    34    36     3    aromatic_prop_1
+   33    32    34    35     3    aromatic_prop_1
+   33    32    34    36     3    aromatic_prop_1
+   32    34    36    27     3    aromatic_prop_1
+   32    34    36    37     3    aromatic_prop_1
+   35    34    36    27     3    aromatic_prop_1
+   35    34    36    37     3    aromatic_prop_1
+
+[ dihedrals ]
+;  ai    aj    ak    al funct            c0            c1            c2            c3
+    1     5    11     2     1 
+    1     3     2     4     1 
+    5     1     7     6     1 
+    7     5     8    13     1 
+    8     7     9    14     1 
+    9     8    11    10     1 
+   11     9     1    12     1 
+   13    22    19    21     1 
+   14    23    21    22     1 
+   14     8    22    27     1 
+   14    36    27    28     1 
+   15    19    25    16     1 
+   15    17    16    18     1 
+   19    21    15    20     1 
+   23    22    25    24     1 
+   25    23    15    26     1 
+   28    27    30    29     1 
+   30    28    32    31     1 
+   32    30    34    33     1 
+   34    32    36    35     1 
+   36    34    27    37     1 
+
+[ virtual_sites2 ]
+38 14 27 1 0.7
+
+; Include Position restraint file
+#ifdef POSRES
+#include "posre.itp"
+#endif
+
+; Include water topology
+#include "/scratch/project_2001565/plasmons/rhodamine/ffamber03/ffamber_tip3p.itp"
+
+#ifdef POSRES_WATER
+; Position restraint for each water oxygen
+[ position_restraints ]
+;  i funct       fcx        fcy        fcz
+   1    1       1000       1000       1000
+#endif
+
+; Include generic topology for ions
+#include "/scratch/project_2001565/plasmons/rhodamine/ffamber03/ions.itp"
+
+[ system ]
+; Name
+      molecule
+
+[ molecules ]
+; Compound        #mols
+rhodamine            1
+SOL 3684
