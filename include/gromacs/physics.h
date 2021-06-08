@@ -102,11 +102,11 @@ extern "C" {
 #define HARTREE_BOHR2MD   (HARTREE2KJ*AVOGADRO/BOHR2NM)
 
 /* Physics constants in atomic units needed for QEDMM */
-#define BOHR    5.29177210903e-11 		/* 1 Bohr in m */
-#define TIME_AU  2.418884326509e-17		/* 1 unit time in au in s */
-#define SPEED_OF_LIGHT_SI SPEED_OF_LIGHT/1E09*1e12 /* m/s */
-#define SPEED_OF_LIGHT_AU SPEED_OF_LIGHT_SI/BOHR*TIME_AU
-#define microM2BOHR 1e-06/BOHR			/* micro-meter to au */
+#define BOHR    (5.29177210903e-11) 		/* 1 Bohr in m */
+#define TIME_AU  (2.418884326509e-17)		/* 1 unit time in au in s */
+#define SPEED_OF_LIGHT_SI (SPEED_OF_LIGHT/1E09*1e12) /* m/s */
+#define SPEED_OF_LIGHT_AU (SPEED_OF_LIGHT_SI/BOHR*TIME_AU)
+#define microM2BOHR (1e-06/BOHR)			/* micro-meter to au */
 
 /* The four basic units */
 #define unit_length   "nm"
