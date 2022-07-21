@@ -579,6 +579,33 @@ static void expM_complex(int ndim, dplx *A, dplx *expA){
   free(temp);
 }
 
+static void expM_complex2(int ndim, dplx *A, dplx *expA,double dt){
+  /* exp(-0.5*I*dt*A), equation B11 in JCP 114 10808 (2001) */
+  int
+    i,j;
+  dplx
+    *wmatrix,*V,*Vt,*temp;
+  double
+    *w;
+  snew(w,ndim);
+  snew(wmatrix,ndim*ndim);
+  snew(V,ndim*ndim);
+  snew(Vt,ndim*ndim);
+  snew(temp,ndim*ndim);
+  diag(ndim,w,V,A);
+  for ( i = 0 ; i < ndim ; i++){
+    wmatrix[i*ndim+i] = cexp((-0.5*IMAG*dt/AU2PS*w[i]));
+  }
+  dagger(ndim,Vt,V);
+  M_complextimesM_complex(ndim,wmatrix,V,temp);
+  M_complextimesM_complex(ndim,Vt,temp,expA);
+  free(Vt);
+  free(V);
+  free(w);
+  free(wmatrix);
+  free(temp);
+}
+
 static void printM  ( int ndim, double *A){
   int 
     i,j;
@@ -612,14 +639,10 @@ static void  propagate_local_dia(int ndim,double dt, dplx *C, dplx *vec,
                            double *QMenerold,dplx *U){
   int
     i,j,k;
-////  double
-////    *S,*SS, *transposeS,*E;
   double
     *E;
   dplx
     *S,*SS, *transposeS;
-////  double
-////    *invsqrtSS,*T,*transposeT,*ham;
   dplx
     *invsqrtSS,*T,*transposeT,*ham;
   dplx
@@ -641,93 +664,34 @@ static void  propagate_local_dia(int ndim,double dt, dplx *C, dplx *vec,
     E[i*ndim+i]    = QMener[i];
     for ( j = 0 ; j < ndim ; j++ ){
       for ( k = 0 ; k < ndim ; k++ ){
-//	S[i*ndim+j] += vecold[i*ndim+k]*vec[j*ndim+k];
 	S[i*ndim+j] += conj(vecold[i*ndim+k])*vec[j*ndim+k];
       }
     }
   }
-
-//
-//  fprintf(stderr,"\n\nFrom propagate_local_dia, E matrix elements:\n");
-//  printM(ndim,E);
-//  fprintf(stderr,"\n\nFrom propagate_local_dia, S matrix elements:\n");
-//  printM_complex(ndim,S);
-//
-
   /* build S^dagger S */
-////  transposeM(ndim,S,transposeS);
-////  MtimesM(ndim,transposeS,S,SS);
-////  invsqrtM(ndim,SS,invsqrtSS);
-////  MtimesM(ndim,S,invsqrtSS,T);
-////  transposeM(ndim,T,transposeT);
   transposeM_complex(ndim,S,transposeS);
-
-//
-//  fprintf(stderr,"\n\nFrom propagate_local_dia, transposeS matrix elements:\n");
-//  printM_complex(ndim,transposeS);
-//
 
   M_complextimesM_complex(ndim,transposeS,S,SS);
 
-//
-//  fprintf(stderr,"\n\nFrom propagate_local_dia, SS matrix elements:\n");
-//  printM_complex(ndim,SS);
-//
-
   invsqrtM_complex(ndim,SS,invsqrtSS);
-
-//
-//  fprintf(stderr,"\n\nFrom propagate_local_dia, invsqrtSS matrix elements:\n");
-//  printM_complex(ndim,invsqrtSS);
-//
 
   M_complextimesM_complex(ndim,S,invsqrtSS,T);
 
-//
-//  fprintf(stderr,"\n\nFrom propagate_local_dia, T matrix elements:\n");
-//  printM_complex(ndim,T);
-//
-
   transposeM_complex(ndim,T,transposeT);
-
-//
-//  fprintf(stderr,"\n\nFrom propagate_local_dia, transposeT matrix elements:\n");
-//  printM_complex(ndim,transposeT);
-//
- 
-  /* reuse invsqrtS */
-////  MtimesM(ndim,E,transposeT,invsqrtSS);
-////  MtimesM(ndim,T,invsqrtSS,ham);
   MtimesM_complex(ndim,E,transposeT,invsqrtSS);
-
-//
-//  fprintf(stderr,"\n\nFrom propagate_local_dia, invsqrtSS (E times transposeT)  matrix elements:\n");
-//  printM_complex(ndim,invsqrtSS);
-//
  
-   M_complextimesM_complex(ndim,T,invsqrtSS,ham);
-
-//
-//  fprintf(stderr,"\n\nFrom propagate_local_dia, ham matrix elements:\n");
-//  printM_complex(ndim,ham);
-//
+ M_complextimesM_complex(ndim,T,invsqrtSS,ham);
  
   for ( i = 0 ; i< ndim; i++){
-////    ham[i+ndim*i] += QMenerold[i];
     ham[i+ndim*i] = creal(ham[i+ndim*i]) + QMenerold[i] + IMAG*cimag(ham[i+ndim*i]);
   }
-  for ( i = 0 ; i < ndim*ndim ; i++ ){
-    H[i]=-0.5*IMAG*dt/AU2PS*ham[i];
-  }
-  expM_complex(ndim,H,expH);
+//  for ( i = 0 ; i < ndim*ndim ; i++ ){
+//    H[i]=-0.5*IMAG*dt/AU2PS*ham[i];
+//  }
+//  expM_complex(ndim,H,expH);
+  expM_complex2(ndim,ham,expH,dt);
 
-////  MtimesM_complex(ndim,transposeT,expH,U);
   M_complextimesM_complex(ndim,transposeT,expH,U);
-
-//
-//  fprintf(stderr,"\n\nFrom propagate_local_dia, U matrix elements:\n");
-//  printM_complex(ndim,U);
-//
  
   /* we use U to propagate C, and keep it to compute the hopping
    * probabilities */
