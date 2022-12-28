@@ -2854,8 +2854,8 @@ int QEDhop(int step, t_QMrec *qm, dplx *eigvec, int ndim, double *eigval){
       }
 ///      if (fabs(dij) > fabs(dii)){
 ///        if(fabs(dij) > fabs(dij_max)){
-      if (abs(dij) > abs(dii)){
-	if(abs(dij) > abs(dij_max)){
+      if (cabs(dij) > cabs(dii)){
+	if(cabs(dij) > cabs(dij_max)){
 	  hopto=i;
 	  dij_max = dij;
 	}
