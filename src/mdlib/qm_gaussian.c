@@ -689,10 +689,6 @@ static void  propagate_local_dia(int ndim,double dt, dplx *C, dplx *vec,
     ham[i+ndim*i] = creal(ham[i+ndim*i]) + QMenerold[i] + IMAG*cimag(ham[i+ndim*i]);
   }
 
-//  for ( i = 0 ; i < ndim*ndim ; i++ ){
-//    H[i]=-0.5*IMAG*dt/AU2PS*ham[i];
-//  }
-
   expM_complex2(ndim,ham,expH,dt);
 
   M_complextimesM_complex(ndim,transposeT,expH,U);
