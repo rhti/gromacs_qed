@@ -1111,7 +1111,7 @@ sparse_eigensolver(gmx_sparsematrix_t *    A,
 /* Gaussian interface routines */
 void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
   FILE    
-    *rffile=NULL,*out=NULL,*Cin=NULL,*zin=NULL;
+    *rffile=NULL,*out=NULL,*Cin=NULL,*zin=NULL,*eigvecin=NULL;
   ivec
     basissets[eQMbasisNR]={{0,3,0},
 			   {0,3,0},/*added for double sto-3g entry in names.c*/
@@ -1126,8 +1126,12 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
   char
     *buf;
   int
-    i,ndim=1,seed;
-  
+    i,j,ndim=1,seed,print=1;
+  double
+    *eig_real,*eig_imag; 
+  dplx
+    *eig;
+ 
   /* using the ivec above to convert the basis read form the mdp file
    * in a human readable format into some numbers for the gaussian
    * route. This is necessary as we are using non standard routes to
@@ -1293,7 +1297,6 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
         fclose(Cin);
         /* print for security */   
 
-        int print = 1;
         if(MULTISIM(cr)){
           if (cr->ms->sim!=0){
             print = 0;
@@ -1358,12 +1361,80 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
 	}
       }
 
+      /* File for providing one step eigenvectors and avoid random phases in continuation runs */
+
+      /* eigvecin if a file cointaining the eigenvectors for one MD step. It has ndim*ndim lines, 
+	 each line cointaining two long floats (the real and imaginary parts) of the ndim components 
+	 of each eigenvector. For now, use the following for preparing this files:
+	 tail -n $ndim eigenvectors.dat | awk '{$1=$2=$3=$4=$5=$6=$7=$8=$9=$10=$11=""; print $0}' | sed 's/\+//g' |
+	 sed 's/I/\n/g' | sed '/^$/d' | sed 's/          //g' > eig_vec_last.dat */
+
+      if(qm->bContinuation){
+	eigvecin=fopen("eig_vec_last.dat","r");
+	if(eigvecin){
+	  fprintf(stderr,"eig_vec_last.dat file exists, reading eigenvectors from last step of previous run\n");
+	  snew(eig_real,ndim*ndim);
+	  snew(eig_imag,ndim*ndim);
+	  for(i=0;i<ndim*ndim;i++){
+	    if(NULL == fgets(buf,2*sizeof(double)+4,eigvecin)){
+	      gmx_fatal(FARGS,"Error reading eig_vec_last.dat, check its content\n");
+	    }
+	    else{
+	      sscanf(buf,"%lf %lf",&eig_real[i],&eig_imag[i]);
+	    }
+	  };
+	  snew(eig,ndim*ndim);
+	  for(i=0;i<ndim*ndim;i++){
+	    eig[i]=eig_real[i]+IMAG*eig_imag[i];
+	  }
+	  /* copy the eigenvectors read from eig_vec_last.dat to qmrec */
+	  snew(qm->eigvec,ndim*ndim);
+	  for(i=0;i<ndim*ndim;i++){
+	    qm->eigvec[i]=eig[i];
+	  };
+          /*  Check read */
+	  if (MULTISIM(cr)){
+	    if (cr->ms->sim==0){
+	      fprintf(stderr,"node %d, Eigenvectors previous step:\n",cr->ms->sim);
+	      for(i=0;i<ndim;i++){
+		fprintf(stderr,"Eig[%d]= ",i);
+		for(j=0;j<ndim;j++){
+		  fprintf(stderr,"%lf + %lf I ",creal(qm->eigvec[i*ndim+j]),cimag(qm->eigvec[i*ndim+j]));
+		};
+		fprintf(stderr,"\n");
+	      };
+	    }
+	  }
+	  else{
+	    fprintf(stderr,"Eigenvectors previous step:\n");
+	    for(i=0;i<ndim;i++){
+	      fprintf(stderr,"Eig[%d]= ",i);
+	      for(j=0;j<ndim;j++){
+		fprintf(stderr,"%lf + %lf I ",creal(qm->eigvec[i*ndim+j]),cimag(qm->eigvec[i*ndim+j]));
+	      };
+	      fprintf(stderr,"\n");
+	    };
+	  }
+	  /* Set qm boolean to indicate it is a Continuation run */
+	  qm->QEDrestart=1;
+	  fclose(eigvecin);
+	}
+	else{
+	  fprintf(stderr,"Warning: No eigenvectors file for last step of previous run, eigenvectors phases will be undetermined\n");
+	  snew(qm->eigvec,ndim*ndim);
+	  qm->QEDrestart=0;
+	}
+      }
+      else{
+	snew(qm->eigvec,ndim*ndim);
+	qm->QEDrestart=0;
+      }
+
       snew(qm->rnr,qm->nsteps);
       srand(seed);
       for (i=0;i< qm->nsteps;i++){
         qm->rnr[i]=(double) rand()/(RAND_MAX*1.0);
       }
-      snew(qm->eigvec,ndim*ndim);
       snew(qm->eigval,ndim);
       snew(buf,3000);
       buf = getenv("WORK_DIR");
@@ -2837,6 +2908,9 @@ int QEDFSSHop(int step, t_QMrec *qm, dplx *eigvec, int ndim, double *eigval, rea
   }
   else{
 //    qm->creal[current]=1.0;
+    if(qm->QEDrestart){
+      track_states(qm->eigvec,eigvec,ndim);
+    }
     fprintf(stderr,"step %d: C: ",step);
     for(i=0;i<ndim;i++){
       c[i] = qm->creal[i]+ IMAG*qm->cimag[i];
@@ -3156,6 +3230,9 @@ void   propagate_TDSE(int step, t_QMrec *qm, dplx *eigvec, int ndim, double *eig
     free(U);
   }
   else{
+    if(qm->QEDrestart){
+      track_states(qm->eigvec,eigvec,ndim);
+    }
     //qm->creal[qm->polariton]=1.0;
     fprintf(stderr,"step %d: C: ",step);
     for(i=0;i<ndim;i++){
