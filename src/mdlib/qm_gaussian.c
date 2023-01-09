@@ -684,15 +684,37 @@ static void  propagate_local_dia(int ndim,double dt, dplx *C, dplx *vec,
   MtimesM_complex(ndim,E,transposeT,invsqrtSS);
  
   M_complextimesM_complex(ndim,T,invsqrtSS,ham);
+//  expM_complex2(ndim,ham,expH,dt);
  
   for ( i = 0 ; i< ndim; i++){
     ham[i+ndim*i] = creal(ham[i+ndim*i]) + QMenerold[i] + IMAG*cimag(ham[i+ndim*i]);
   }
-//  for ( i = 0 ; i < ndim*ndim ; i++ ){
-//    H[i]=-0.5*IMAG*dt/AU2PS*ham[i];
-//  }
-//  expM_complex(ndim,H,expH);
-  expM_complex2(ndim,ham,expH,dt);
+  for ( i = 0 ; i < ndim*ndim ; i++ ){
+    H[i]=-0.5*IMAG*dt/AU2PS*ham[i];
+  }
+/* if H is diagonal already, skip the expM_complex function */
+  int bdiag=1;
+  double threshold=1.0e-08;
+  for (i=0; i<ndim && bdiag;i++){
+    for (j=i+1;j<ndim && bdiag;j++){
+#ifdef MKL
+      if(creal(H[i*ndim+j]) > threshold || cimag(H[i*ndim+j]) > threshold){
+#else
+      if(creal(H[i*ndim+j]) > threshold || cimag(H[i*ndim+j]) > threshold){
+#endif
+        bdiag=0;
+      }
+    };
+  };
+  if(bdiag){
+    fprintf(stderr,"propagate_local_dia: H is almost diagonal, skipping diagonalization\n");
+    for(i=0;i<ndim;i++){
+      expH[i*ndim+i]=cexp(H[i*ndim+i]);
+    };
+  }
+  else{
+    expM_complex(ndim,H,expH);
+  }
 
   M_complextimesM_complex(ndim,transposeT,expH,U);
  
