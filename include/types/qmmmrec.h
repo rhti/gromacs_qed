@@ -106,6 +106,8 @@ double groundstate;
 		  */
   double *eigval; /* to keep prevous energies, needed for hopping */
   gmx_bool bQED; /* cavity QED with multiple molecules */
+  gmx_bool bContinuation;   /* Continuation run: copied here to link it with QEDrestart (ideally both are True or False) */
+  gmx_bool QEDrestart; /* for restarting cavity QED with well defined eigenvectors phases */
   rvec     *xref;
   rvec     *tdmXgrad;
   rvec     *tdmYgrad;

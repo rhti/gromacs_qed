@@ -86,6 +86,7 @@ typedef struct {
   int     *QMmult;      /* Spin multiplicicty in the QM region          */
   gmx_bool    *bSH;         /* surface hopping (diabatic hop only)          */
   gmx_bool    *bQED;      /* cavity QED stuff */
+  gmx_bool    *QEDrestart;      /* cavity QED stuff */
 
   int     *CASorbitals; /* number of orbiatls in the active space       */
   int     *CASelectrons;/* number of electrons in the active space      */
