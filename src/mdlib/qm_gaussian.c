@@ -98,6 +98,9 @@
 
 #include <time.h>
 
+/* Uncomment to print NACs*/
+//#define nacs_flag true
+
 typedef double complex dplx;
 
 static double dottrrr(int n, real *f, rvec *A, rvec *B);
@@ -297,20 +300,20 @@ static void diag_complex(int n, dplx *w, dplx *V, dplx *M){
 /* diagonalize hermitian matrix using MKL routine zheev */
 static void diag(int n, double *w, dplx *V, dplx *M)
 {
-  char 
+  char
     jobz, uplo;
-  int 
+  int
     i, j, lwork, info;
-  double 
+  double
     *rwork;
-#ifdef MKL 
+#ifdef MKL
   MKL_Complex16
     *M_mkl, *work;
-#else 
+#else
   lapack_complex_double
     *M_mkl, *work;
 #endif
- 
+
   jobz = 'V';
   uplo = 'U';
   lwork = 2*n;
@@ -321,29 +324,29 @@ static void diag(int n, double *w, dplx *V, dplx *M)
 
   for (i=0; i<n; i++){
     for (j=0; j<n; j++){
-#ifdef MKL       
+#ifdef MKL
       M_mkl[j + i*n].real = creal(M[j + i*n]);
       M_mkl[j + i*n].imag = cimag(M[j + i*n]);
-#else 
+#else
       M_mkl[j + i*n] = M[j + i*n];
-#endif 
+#endif
     }
   }
-#ifdef MKL 
+#ifdef MKL
   zheev(&jobz, &uplo, &n, M_mkl, &n, w, work, &lwork, rwork, &info);
-#else 
+#else
   F77_FUNC(zheev,ZHEEV)(&jobz, &uplo, &n, M_mkl, &n, w, work, &lwork, rwork, &info);
   if (info != 0){
     gmx_fatal(FARGS, "Lapack returned error code: %d in zheev", info);
   }
-#endif 
+#endif
   for (i=0; i<n; i++){
     for (j=0; j<n; j++){
-#ifdef MKL 
+#ifdef MKL
       V[j + i*n] = M_mkl[j + i*n].real + IMAG*M_mkl[j + i*n].imag;
-#else 
+#else
       V[j + i*n] = creal(M_mkl[j + i*n]) + IMAG*cimag(M_mkl[j + i*n]);
-#endif 
+#endif
     }
   }
 
@@ -394,10 +397,10 @@ static void MtimesV(int ndim, double *A, double *b, double *c){
   int
     i,k;
 
-  for (i = 0 ; i < ndim ; i++ ){
-    c[i] = 0;
-    for ( k = 0 ; k < ndim ; k++ ){
-      c[i] += A[i*ndim+k]*b[k];
+  for(i=0;i<ndim;i++){
+    c[i]=0;
+    for(k=0;k<ndim;k++){
+      c[i]+=A[i*ndim+k]*b[k];
     }
   }
 }
@@ -680,7 +683,7 @@ static void  propagate_local_dia(int ndim,double dt, dplx *C, dplx *vec,
   transposeM_complex(ndim,T,transposeT);
   MtimesM_complex(ndim,E,transposeT,invsqrtSS);
  
- M_complextimesM_complex(ndim,T,invsqrtSS,ham);
+  M_complextimesM_complex(ndim,T,invsqrtSS,ham);
  
   for ( i = 0 ; i< ndim; i++){
     ham[i+ndim*i] = creal(ham[i+ndim*i]) + QMenerold[i] + IMAG*cimag(ham[i+ndim*i]);
@@ -2018,7 +2021,7 @@ real read_gaussian_output_QED(t_commrec *cr,rvec QMgrad_S1[],rvec MMgrad_S1[],
 /* now we need to check if the dipole moment has changed sign. If so, we simply
  * also change the sign of the E field. We use the trick Dmitry used:
  */
-  if (step){
+  if(step){
     ri = sqrt(tdm[0][XX]*tdm[0][XX]+tdm[0][YY]*tdm[0][YY]+tdm[0][ZZ]*tdm[0][ZZ]);
     ro = sqrt(qm->tdmold[XX]*qm->tdmold[XX]+qm->tdmold[YY]*qm->tdmold[YY]+qm->tdmold[ZZ]*qm->tdmold[ZZ]);
     cosa = (tdm[0][XX]*qm->tdmold[XX]+tdm[0][YY]*qm->tdmold[YY]+tdm[0][ZZ]*qm->tdmold[ZZ]) / (ri * ro);
@@ -2684,7 +2687,7 @@ int QEDFSSHop(int step, t_QMrec *qm, dplx *eigvec, int ndim, double *eigval, rea
   hopto=qm->polariton;
   snew(c,ndim); 
   snew(cold,ndim);
-  if (step){
+  if(step){
     rnr = qm->rnr[step];
     for (i=0;i<ndim;i++){
        cold[i]=qm->creal[i]+IMAG*qm->cimag[i];
@@ -3148,6 +3151,97 @@ double cavity_dispersion(int n, t_QMrec *qm){
   return sqrt(qm->omega*qm->omega+SPEED_OF_LIGHT_AU*SPEED_OF_LIGHT_AU*(2*M_PI*n/(qm->L*microM2BOHR))*(2*M_PI*n/(qm->L*microM2BOHR))/(qm->n_index*qm->n_index));
 } /* cavity_dispersion */
 
+#ifdef nacs_flag
+/* Print the non-adiabatic coupling vectors HF_f */
+void dump_nacs(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double *u, rvec *tdmX,
+		 rvec *tdmY, rvec *tdmZ, rvec *QMgrad_S0, rvec *QMgrad_S1, t_QMrec *qm, t_forcerec *fr){
+  int 
+    i,j,n,p,q,begin,end,a;
+  double 
+    V0_2EP;
+  dplx 
+    fij,betasq,a_sum,a_sumq;  
+  dplx
+    bp_aq,ap_bq;
+  rvec
+    *HF_f;
+  char
+    *non_adiab_couplings;
+  FILE
+    *nacs=NULL;
+
+  V0_2EP = qm->omega/iprod(qm->E,qm->E); // Cavity volume at zero k
+
+  if(fr->qr->SHmethod != eSHmethodEhrenfest){ /* Single state procedure  */
+    begin=qm->polariton;    
+    end=qm->polariton+1;
+  }
+  else{
+    /* Ehrenfest dynamics, need to compute gradients of all polaritonic states 
+     * and weight them with weights of the states. Also the nonadiabatic couplings 
+     * between polaritonic states are needed now */
+    begin=0;
+    end=ndim;
+  }
+
+  /* Memory allocation of non-adiabatic couplings string & vector HF_f */
+  snew(non_adiab_couplings,3000);
+  snew(HF_f,qm->nrQMatoms);
+
+  for (p=begin;p<end;p++){
+    /* diagonal terms are zero but we need a_sum=a_sump */
+    n=qm->n_min;
+    a_sum = 0.0+IMAG*0.0;
+    for (i=0;i<(qm->n_max-qm->n_min+1);i++){
+      a_sum += eigvec[p*ndim+nmol+i]*sqrt(cavity_dispersion(n++,qm)/V0_2EP)*cexp(+IMAG*2*M_PI*(n-1)*qm->z[m]/(qm->L*microM2BOHR));
+    }
+
+    /* now off-diagonals */
+    for (q=p+1;q<end;q++){
+      betasq = conj(eigvec[p*ndim+m])*eigvec[q*ndim+m];
+
+      n=qm->n_min;
+      a_sumq = 0.0+IMAG*0.0;
+      for (i=0;i<(qm->n_max-qm->n_min+1);i++){
+	a_sumq += eigvec[q*ndim+nmol+i]*sqrt(cavity_dispersion(n++,qm)/V0_2EP)*cexp(+IMAG*2*M_PI*(n-1)*qm->z[m]/(qm->L*microM2BOHR));
+      }
+
+      bp_aq = conj(eigvec[p*ndim+m])*a_sumq;	// (beta_p)*(sum_of alphas_q
+      ap_bq = eigvec[q*ndim+m]*conj(a_sum); 
+
+      /* Non-adiabatic couplings file nacs_m_p-q.dat (m=molecule & p,q=polaritons) */
+      sprintf(non_adiab_couplings,"%s/nacs_%d_%d-%d.dat",qm->work_dir,m,p,q);
+      nacs=fopen(non_adiab_couplings,"w");
+      fprintf(nacs,"%12.8lf %12.8lf\n",eigval[q]*HARTREE2KJ*AVOGADRO,eigval[p]*HARTREE2KJ*AVOGADRO);
+ 
+      /* Assemble terms to compute non-adiabatic couplings */
+      for(i=0;i<qm->nrQMatoms;i++){
+	for(j=0;j<DIM;j++){
+	  /* diagonal term */
+	  fij = (betasq)*(QMgrad_S1[i][j]-QMgrad_S0[i][j]);
+	  /* off-diagonal term */
+	  fij-= (bp_aq+ap_bq)*tdmX[i][j]*u[0];
+	  fij-= (bp_aq+ap_bq)*tdmY[i][j]*u[1];
+	  fij-= (bp_aq+ap_bq)*tdmZ[i][j]*u[2];
+	  fij*=HARTREE_BOHR2MD;
+
+	  /* NACs vector */
+	  HF_f[i][j]=creal(fij);
+	}
+      }
+      /* Print non-adiabatic couplings per atom */
+      for(a=0;a<qm->nrQMatoms;a++){
+	fprintf(nacs,"%12.8lf %12.8lf %12.8lf\n",HF_f[a][0],HF_f[a][1],HF_f[a][2]);
+      }
+      fclose(nacs);
+    };
+  };
+  free(non_adiab_couplings);
+  free(HF_f);
+  return;
+} /* Print non-adiabatic coupling vectors */
+#endif
+
 /* Compute Hellman Feynman forces */
 double HF_forces(int m, int nmol, int ndim, double *eigval, dplx *eigvec, double *u, rvec *tdmX,
 		 rvec *tdmY, rvec *tdmZ, rvec *tdmXMM, rvec *tdmYMM, rvec *tdmZMM, rvec *QMgrad_S0,
@@ -3444,7 +3538,7 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
     energies[i]=Eground;
   }
   energies[m]=QMener; /* the excited state energy, overwrites
-			 the ground state energie */
+			 the ground state energy */
   /* send around */
   if(MULTISIM(cr)){
     gmx_sumd_sim(ndim,energies,cr->ms);
@@ -3481,7 +3575,7 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
   }
 
   /* diagonalize the QED matrix on the masternode, and communicate back
-     the eigen vectors to compute the Hellman Feynman forces
+     the eigenvectors to compute the Hellman Feynman forces
   */
   snew(eigval,ndim);
   snew(eigvec,ndim*ndim);
@@ -3516,7 +3610,7 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
     fprintf(stderr,"\n\ndiagonalizing matrix\n");
     diag(ndim,eigval,eigvec,matrix);
     fprintf(stderr,"step %d Eigenvalues: ",step);
-    for ( i = 0 ; i<ndim;i++){
+    for(i=0;i<ndim;i++){
       fprintf(stderr,"%lf ",eigval[i]);
       qm->eigval[i]=eigval[i]; 
     }
@@ -3593,6 +3687,9 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
   /* compute Hellman Feynman forces */
   QMener = HF_forces(m,nmol,ndim,eigval,eigvec,u,tdmX,tdmY,tdmZ,tdmXMM,tdmYMM,
 		     tdmZMM,QMgrad_S0,MMgrad_S0,QMgrad_S1,MMgrad_S1,f,fshift,qm,mm,fr);
+#ifdef nacs_flag
+  dump_nacs(m,nmol,ndim,eigval,eigvec,u,tdmX,tdmY,tdmZ,QMgrad_S0,QMgrad_S1,qm,fr);
+#endif
     
   interval=time(NULL);
   if(MULTISIM(cr)){
@@ -3627,15 +3724,15 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
       i = qm->polariton;
       fprintf(evout,"step %d Eigenvector %d:",step,i);
       for (k=0;k<ndim;k++){
-        fprintf(evout," %12.8lf+%12.8lfI  ",creal(eigvec[i*ndim+k]),cimag(eigvec[i*ndim+k]));
+        fprintf(evout," %12.8lf + %12.8lf I  ",creal(eigvec[i*ndim+k]),cimag(eigvec[i*ndim+k]));
       }
       fprintf(evout,"\n");
       int ii;
       final_evout=fopen(final_eigenvecfile,"a");
       for(ii=0;ii<ndim;ii++){
-	fprintf(final_evout,"step %d Eigenvector %d gap %lf (c*c: %lf ):",step,ii,eigval[ii]-(qm->groundstate,energies[ndim-1]-cavity_dispersion(qm->n_max,qm)),conj(qm->creal[ii]+IMAG*qm->cimag[ii])*(qm->creal[ii]+IMAG*qm->cimag[ii]));
+	fprintf(final_evout,"step %d Eigenvector %d gap %lf (c*c: %12.8lf + %12.8lf I):",step,ii,eigval[ii]-(qm->groundstate,energies[ndim-1]-cavity_dispersion(qm->n_max,qm)),qm->creal[ii],qm->cimag[ii]);
 	for(k=0;k<ndim;k++){
-	  fprintf(final_evout," %12.8lf+%12.8lfI  ",creal(eigvec[ii*ndim+k]),cimag(eigvec[ii*ndim+k]));
+	  fprintf(final_evout," %12.8lf + %12.8lf I ",creal(eigvec[ii*ndim+k]),cimag(eigvec[ii*ndim+k]));
 	}
       fprintf(final_evout,"\n");
       }
@@ -3646,9 +3743,9 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
        * Thee will need to be multiplied by the coefficients. 
        */
       for(i=0;i<ndim;i++){
-	fprintf(evout,"step %d Eigenvector %d gap %lf (c*c: %lf ):",step,i,eigval[i]-(qm->groundstate,energies[ndim-1]-cavity_dispersion(qm->n_max,qm)),conj(qm->creal[i]+IMAG*qm->cimag[i])*(qm->creal[i]+IMAG*qm->cimag[i]));
+	fprintf(evout,"step %d Eigenvector %d gap %lf (c*c: %12.8lf + %12.8lf I):",step,i,eigval[i]-(qm->groundstate,energies[ndim-1]-cavity_dispersion(qm->n_max,qm)),qm->creal[i],qm->cimag[i]);
 	for(k=0;k<ndim;k++){
-	  fprintf(evout," %12.8lf+%12.8lfI ",creal(eigvec[i*ndim+k]),cimag(eigvec[i*ndim+k]));
+	  fprintf(evout," %12.8lf + %12.8lf I ",creal(eigvec[i*ndim+k]),cimag(eigvec[i*ndim+k]));
 	}
 	fprintf(evout,"\n");
       }
@@ -3671,21 +3768,23 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
       Cout= fopen(buf,"w");
       fprintf(Cout,"%d\n",step);
       for(i=0;i<ndim;i++){
-        fprintf (Cout,"%.5lf %.5lf\n ",qm->creal[i],qm->cimag[i]);
+        fprintf (Cout,"%12.8lf %12.8lf\n ",qm->creal[i],qm->cimag[i]);
       }
       fprintf (Cout,"%.5lf\n",qm->groundstate);
       fclose(Cout);
     }
     /* now account for the decay that will happen in the next timestep */
-    for ( i = 0 ; i < ndim ; i++ ){
-      asq = 0.0;
-      for (j=0;j<(qm->n_max-qm->n_min+1);j++){
-	asq += conj(eigvec[i*ndim+nmol+j])*eigvec[i*ndim+nmol+j];
+    if (qm->QEDdecay > 0.0){
+      for ( i = 0 ; i < ndim ; i++ ){
+	asq = 0.0;
+	for (j=0;j<(qm->n_max-qm->n_min+1);j++){
+	  asq += conj(eigvec[i*ndim+nmol+j])*eigvec[i*ndim+nmol+j];
+	}
+	decay = exp(-0.5*(qm->QEDdecay)*asq*(qm->dt)); 
+	qm->groundstate-=conj(qm->creal[i]+IMAG*qm->cimag[i])*(qm->creal[i]+IMAG*qm->cimag[i])*(decay*decay-1);
+	qm->creal[i] *= decay;
+	qm->cimag[i] *= decay;
       }
-      decay = exp(-0.5*(qm->QEDdecay)*asq*(qm->dt)); 
-      qm->groundstate-=conj(qm->creal[i]+IMAG*qm->cimag[i])*(qm->creal[i]+IMAG*qm->cimag[i])*(decay*decay-1);
-      qm->creal[i] *= decay;
-      qm->cimag[i] *= decay;
     }
     /* now account also for the decoherence that will also happen in the next timestep */
     /* we thus use the current total kinetic energy. We need to send this around we wrote separate routine */
