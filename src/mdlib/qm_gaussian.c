@@ -539,7 +539,7 @@ static void invsqrtM_complex(int ndim, dplx *A, dplx *B){
   /* and from the right by V */
   M_complextimesM_complex(ndim,temp,V,wmatrix);
   for (i = 0 ; i< ndim*ndim ; i++ ){
-    B[i] = creal(wmatrix[i]);
+    B[i] = wmatrix[i];
   }
   free(Vt);
   free(V);
@@ -712,7 +712,7 @@ static void  propagate_local_dia(int ndim,double dt, dplx *C, dplx *vec,
   free(T);
   free(transposeT);
   free(S);
-   free (SS);
+  free(SS);
   free(invsqrtSS);
   free(transposeS);
   free(E);
@@ -1230,9 +1230,13 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
       fprintf(stderr,"\nDoing QED");
       /* prepare for a cavity QED MD run. Obviously only works with QM/MM */
       if(MULTISIM(cr)){
-        fprintf(stderr,"doing parallel; ms->nsim, ms_>sim = %d,%d\n", 
+	fprintf(stderr,"doing parallel; ms->nsim, ms_>sim = %d,%d\n", 
                 cr->ms->nsim,cr->ms->sim);
-        snew(buf,3000);
+	/* Un-setting boolean for printing for nodes != node0 */   
+	if (cr->ms->sim!=0){
+	  print=0;
+	}
+	snew(buf,3000);
         buf = getenv("TMP_DIR");
         if (buf){
           snew(qm->subdir,3000);
@@ -1270,19 +1274,14 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
         sscanf(buf,"%lf",&qm->groundstate);
 
         fclose(Cin);
-        /* print for security */   
 
-        if(MULTISIM(cr)){
-          if (cr->ms->sim!=0){
-            print = 0;
-          }
-        } 
+	/* print for security */   
         if(print){ 
           fprintf (stderr,"coefficients\nC: ");
           for(i=0;i<ndim;i++){
             fprintf(stderr,"%lf ",conj(qm->creal[i]+IMAG*qm->cimag[i])*(qm->creal[i]+IMAG*qm->cimag[i]));
           }
-          fprintf(stderr,"%lf ",qm->groundstate);
+          fprintf(stderr,"rho0: %lf ",qm->groundstate);
         }
       }
       else {
@@ -1291,7 +1290,7 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
         if (buf){
           sscanf(buf,"%d",&seed);
         }
-        fprintf(stderr,"no coefficients in C.dat, C[polariton]=1.0+0.0I\n");
+        fprintf(stderr,"No C.dat file, setting C[%d]=1.0+0.0I\n",qm->polariton);
         qm->creal[qm->polariton]=1;
         qm->groundstate=0.0;
         fprintf(stderr,"setting randon seed to %d\n",seed);
@@ -1322,17 +1321,11 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
 	fclose(zin);
       }
       else{
-	fprintf(stderr,"No z-positions file, setting molecules equally spaced along the z-axis\n");
-        for(i=0;i<ndim-(qm->n_max-qm->n_min+1);i++){
+	if(print){
+	  fprintf(stderr,"No z-positions file, setting molecules equally spaced along the z-axis\n");
+	}
+	for(i=0;i<ndim-(qm->n_max-qm->n_min+1);i++){
 	  qm->z[i]=i*qm->L*microM2BOHR/(ndim-(qm->n_max-qm->n_min+1));
-	  if (MULTISIM(cr)){
-	    if (cr->ms->sim==0){
-	      fprintf(stderr,"node %d, z[%d]=%lf\n",cr->ms->sim,i,qm->z[i]);
-	    }
-	  }
-	  else{
- 	    fprintf(stderr,"z[%d]=%lf\n",i,qm->z[i]);
-	  }
 	}
       }
 
@@ -1367,21 +1360,9 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
 	  for(i=0;i<ndim*ndim;i++){
 	    qm->eigvec[i]=eig[i];
 	  };
-          /*  Check read */
-	  if (MULTISIM(cr)){
-	    if (cr->ms->sim==0){
-	      fprintf(stderr,"node %d, Eigenvectors previous step:\n",cr->ms->sim);
-	      for(i=0;i<ndim;i++){
-		fprintf(stderr,"Eig[%d]= ",i);
-		for(j=0;j<ndim;j++){
-		  fprintf(stderr,"%lf + %lf I ",creal(qm->eigvec[i*ndim+j]),cimag(qm->eigvec[i*ndim+j]));
-		};
-		fprintf(stderr,"\n");
-	      };
-	    }
-	  }
-	  else{
-	    fprintf(stderr,"Eigenvectors previous step:\n");
+          /* Print to check correcteness of read */
+	  if(print){
+	    fprintf(stderr,"node %d, Eigenvectors previous step:\n",cr->ms->sim);
 	    for(i=0;i<ndim;i++){
 	      fprintf(stderr,"Eig[%d]= ",i);
 	      for(j=0;j<ndim;j++){
@@ -1395,8 +1376,10 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
 	  fclose(eigvecin);
 	}
 	else{
-	  fprintf(stderr,"Warning: No eigenvectors file for last step of previous run, eigenvectors phases will be undetermined\n");
-	  snew(qm->eigvec,ndim*ndim);
+	  if(print){
+	    fprintf(stderr,"Warning: No eigenvectors file for last step of previous run, eigenvectors phases will be undetermined\n");
+	  }
+  	  snew(qm->eigvec,ndim*ndim);
 	  qm->QEDrestart=0;
 	}
       }
@@ -3697,8 +3680,7 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
     else{
       fprintf(stderr,"eigensolver done at %ld\n",interval-start);
     }
-    /* lots of duplicate code now... 
-     */
+
     if(fr->qr->SHmethod != eSHmethodEhrenfest){
       if(fr->qr->SHmethod == eSHmethoddiabatic){
 	qm->polariton = QEDhop(step,qm,eigvec,ndim,eigval);
@@ -3804,7 +3786,7 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
       int ii;
       final_evout=fopen(final_eigenvecfile,"a");
       for(ii=0;ii<ndim;ii++){
-	fprintf(final_evout,"step %d Eigenvector %d gap %lf (c*c: %12.8lf + %12.8lf I):",step,ii,eigval[ii]-(qm->groundstate,energies[ndim-1]-cavity_dispersion(qm->n_max,qm)),qm->creal[ii],qm->cimag[ii]);
+	fprintf(final_evout,"step %d Eigenvector %d gap %lf (c: %12.8lf + %12.8lf I):",step,ii,eigval[ii]-(qm->groundstate,energies[ndim-1]-cavity_dispersion(qm->n_max,qm)),qm->creal[ii],qm->cimag[ii]);
 	for(k=0;k<ndim;k++){
 	  fprintf(final_evout," %12.8lf + %12.8lf I ",creal(eigvec[ii*ndim+k]),cimag(eigvec[ii*ndim+k]));
 	}
@@ -3817,7 +3799,7 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
        * Thee will need to be multiplied by the coefficients. 
        */
       for(i=0;i<ndim;i++){
-	fprintf(evout,"step %d Eigenvector %d gap %lf (c*c: %12.8lf + %12.8lf I):",step,i,eigval[i]-(qm->groundstate,energies[ndim-1]-cavity_dispersion(qm->n_max,qm)),qm->creal[i],qm->cimag[i]);
+	fprintf(evout,"step %d Eigenvector %d gap %lf (c: %12.8lf + %12.8lf I):",step,i,eigval[i]-(qm->groundstate,energies[ndim-1]-cavity_dispersion(qm->n_max,qm)),qm->creal[i],qm->cimag[i]);
 	for(k=0;k<ndim;k++){
 	  fprintf(evout," %12.8lf + %12.8lf I ",creal(eigvec[i*ndim+k]),cimag(eigvec[i*ndim+k]));
 	}
