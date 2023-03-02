@@ -243,23 +243,18 @@ static void diag_complex(int n, dplx *w, dplx *V, dplx *M){
   snew(work, lwork);
   snew(rwork, 3*n);
 
+  /* Fill the matrix by columns as expected by lapack & MKL */
   for (i=0; i<n; i++){
-#ifdef MKL 
-    w_mkl[i].real = creal(w[i]);
-    w_mkl[i].imag = cimag(w[i]);
-#else 
-    w_mkl[i] = w[i];
-#endif
     for (j=0; j<n; j++){ 
 #ifdef MKL 
-      M_mkl[j + i*n].real = creal(M[j + i*n]);
-      M_mkl[j + i*n].imag = cimag(M[j + i*n]);
+      M_mkl[j + i*n].real = creal(M[i + j*n]);
+      M_mkl[j + i*n].imag = cimag(M[i + j*n]);
 #else 
-      M_mkl[j + i*n] = M[j + i*n];
+      M_mkl[j + i*n] = M[i + j*n];
 #endif
     }
   }
-#ifdef MKL 
+#ifdef MKL
   zgeev(&jobvl,&jobvr,&n, M_mkl, &n, w_mkl, vl,&n,vr,&n,work, &lwork, rwork, &info);
 //  zheev(&jobz, &uplo, &n, M_mkl, &n, w, work, &lwork, rwork, &info);
 #else 
@@ -267,7 +262,7 @@ static void diag_complex(int n, dplx *w, dplx *V, dplx *M){
   if (info != 0){
     gmx_fatal(FARGS, "Lapack returned error code: %d in zheev", info);
   }
-#endif   
+#endif
 
 //  fprintf(stderr,"\n\n From diag_complex, vr:\n\n");
 //  printM_complex(n,vr);
@@ -275,18 +270,20 @@ static void diag_complex(int n, dplx *w, dplx *V, dplx *M){
 //  fprintf(stderr,"\n\n From diag_complex, vl:\n\n");
 //  printM_complex(n,vl);
 
+  /* Return the eigenvectors by lines as built-in the QED code */
   for (i=0; i<n; i++){
+    /* Returning eigenvelues here */
 #ifdef MKL 
     w[i] = w_mkl[i].real+IMAG*w_mkl[i].imag;
-#else 
+#else
     w[i] = creal(w_mkl[i])+IMAG*cimag(w_mkl[i]);
-#endif 
+#endif
     for (j=0; j<n; j++){
-#ifdef MKL 
+#ifdef MKL
       V[j + i*n] = vr[j + i*n].real + IMAG*vr[j + i*n].imag;
-#else 
+#else
       V[j + i*n] = creal(vr[j + i*n]) + IMAG*cimag(vr[j + i*n]);
-#endif 
+#endif
     }
   }
   sfree(vl);
@@ -322,13 +319,14 @@ static void diag(int n, double *w, dplx *V, dplx *M)
   snew(work, lwork);
   snew(rwork, 3*n);
 
+  /* Fill the matrix by columns as expected by lapack & MKL */
   for (i=0; i<n; i++){
     for (j=0; j<n; j++){
 #ifdef MKL
-      M_mkl[j + i*n].real = creal(M[j + i*n]);
-      M_mkl[j + i*n].imag = cimag(M[j + i*n]);
+      M_mkl[i*n + j].real = creal(M[i + j*n]);
+      M_mkl[i*n + j].imag = cimag(M[i + j*n]);
 #else
-      M_mkl[j + i*n] = M[j + i*n];
+      M_mkl[i*n + j] = M[i + j*n];
 #endif
     }
   }
@@ -340,6 +338,7 @@ static void diag(int n, double *w, dplx *V, dplx *M)
     gmx_fatal(FARGS, "Lapack returned error code: %d in zheev", info);
   }
 #endif
+  /* Return the eigenvectors by lines as built-in the QED code */
   for (i=0; i<n; i++){
     for (j=0; j<n; j++){
 #ifdef MKL
@@ -349,7 +348,6 @@ static void diag(int n, double *w, dplx *V, dplx *M)
 #endif
     }
   }
-
   sfree(rwork);
   sfree(M_mkl);
   sfree(work);
@@ -463,16 +461,17 @@ static void MtimesM_complex (int ndim, double *A,dplx *B,dplx *C){
 static void invsqrtM (int ndim, double *A, double *B){
 /* B is A^-1/2 */
   int
-    i;
+    i,j;
   dplx
-    *wmatrix,*V,*Vt,*temp,*newA;
+    *wmatrix,*V,*O,*Ot,*temp,*newA;
   double
     *w;
   snew(newA,ndim*ndim);
   snew(w,ndim);
   snew(wmatrix,ndim*ndim);
   snew(V,ndim*ndim);
-  snew(Vt,ndim*ndim);
+  snew(O,ndim*ndim);
+  snew(Ot,ndim*ndim);
   snew(temp,ndim*ndim);
   /* diagonalize */
 
@@ -488,17 +487,25 @@ static void invsqrtM (int ndim, double *A, double *B){
     wmatrix[i*ndim+i] = 1.0/csqrt(w[i]);
   }
 
-  dagger(ndim, Vt, V);
-
-  /* multiple from the left by Vt */
-  M_complextimesM_complex(ndim,Vt,wmatrix,temp);
-
-  /* and from the right by V */
-  M_complextimesM_complex(ndim,temp,V,wmatrix);
-  for (i = 0 ; i< ndim*ndim ; i++ ){
-    B[i] = creal(wmatrix[i]);
+  /* The transformation matrix O in A=OwOt contains the eigenvectors V as columns */
+  for(i=0;i<ndim;i++){
+    for(j=0;j<ndim;j++){
+      O[i+j*ndim]=V[j+i*ndim];
+    }
   }
-  free(Vt);
+  dagger(ndim,Ot,O);
+
+  /* multiple from the right by Ot */
+  M_complextimesM_complex(ndim,wmatrix,Ot,temp);
+
+  /* and from the left by O */
+  M_complextimesM_complex(ndim,O,temp,wmatrix);
+  for (i = 0 ; i< ndim*ndim ; i++ ){
+    B[i] = wmatrix[i];
+  }
+
+  free(Ot);
+  free(O);
   free(V);
   free(w);
   free(wmatrix);
@@ -509,16 +516,17 @@ static void invsqrtM (int ndim, double *A, double *B){
 static void invsqrtM_complex(int ndim, dplx *A, dplx *B){
 /* B is A^-1/2 */
   int
-    i;
+    i,j;
   dplx
-    *wmatrix,*V,*Vt,*temp,*newA;
+    *wmatrix,*V,*O,*Ot,*temp,*newA;
   double
     *w;
   snew(newA,ndim*ndim);
   snew(w,ndim);
   snew(wmatrix,ndim*ndim);
   snew(V,ndim*ndim);
-  snew(Vt,ndim*ndim);
+  snew(O,ndim*ndim);
+  snew(Ot,ndim*ndim);
   snew(temp,ndim*ndim);
 
   /* diagonalize */
@@ -531,17 +539,26 @@ static void invsqrtM_complex(int ndim, dplx *A, dplx *B){
   for ( i = 0 ; i < ndim ; i++){
     wmatrix[i*ndim+i] = 1.0/csqrt(w[i]);
   }
-  dagger(ndim, Vt, V);
 
-  /* multiple from the left by Vt */
-  M_complextimesM_complex(ndim,Vt,wmatrix,temp);
+  /* The transformation matrix O in A=OwOt contains the eigenvectors V as columns */
+  for(i=0;i<ndim;i++){
+    for(j=0;j<ndim;j++){
+      O[i+j*ndim]=V[j+i*ndim];
+    }
+  }
 
-  /* and from the right by V */
-  M_complextimesM_complex(ndim,temp,V,wmatrix);
+  dagger(ndim,Ot,O);
+
+  /* multiple from the right by Ot */
+  M_complextimesM_complex(ndim,wmatrix,Ot,temp);
+
+  /* and from the left by O */
+  M_complextimesM_complex(ndim,O,temp,wmatrix);
   for (i = 0 ; i< ndim*ndim ; i++ ){
     B[i] = wmatrix[i];
   }
-  free(Vt);
+  free(O);
+  free(Ot);
   free(V);
   free(w);
   free(wmatrix);
@@ -554,13 +571,14 @@ static void expM_complex(int ndim, dplx *A, dplx *expA){
   int
     i,j;
   dplx
-    *wmatrix,*V,*Vt,*temp;
+    *wmatrix,*V,*O,*Ot,*temp;
   dplx
     *w;
   snew(w,ndim);
   snew(wmatrix,ndim*ndim);
   snew(V,ndim*ndim);
-  snew(Vt,ndim*ndim);
+  snew(O,ndim*ndim);
+  snew(Ot,ndim*ndim);
   snew(temp,ndim*ndim);
 
   /* diagonalize */
@@ -571,11 +589,20 @@ static void expM_complex(int ndim, dplx *A, dplx *expA){
   for ( i = 0 ; i < ndim ; i++){
     wmatrix[i*ndim+i] = cexp((w[i]));
   }
-  dagger(ndim,Vt,V);
-  M_complextimesM_complex(ndim,wmatrix,V,temp);
-  M_complextimesM_complex(ndim,Vt,temp,expA);
 
-  free(Vt);
+  /* The transformation matrix O in A=OwOt contains the eigenvectors V as columns */
+  for(i=0;i<ndim;i++){
+    for(j=0;j<ndim;j++){
+      O[i+j*ndim]=V[j+i*ndim];
+    }
+  }
+
+  dagger(ndim,Ot,O);
+  M_complextimesM_complex(ndim,wmatrix,Ot,temp);
+  M_complextimesM_complex(ndim,O,temp,expA);
+
+  free(O);
+  free(Ot);
   free(V);
   free(w);
   free(wmatrix);
@@ -587,22 +614,32 @@ static void expM_complex2(int ndim, dplx *A, dplx *expA,double dt){
   int
     i,j;
   dplx
-    *wmatrix,*V,*Vt,*temp;
+    *wmatrix,*V,*O,*Ot,*temp;
   double
     *w;
   snew(w,ndim);
   snew(wmatrix,ndim*ndim);
   snew(V,ndim*ndim);
-  snew(Vt,ndim*ndim);
+  snew(O,ndim*ndim);
+  snew(Ot,ndim*ndim);
   snew(temp,ndim*ndim);
   diag(ndim,w,V,A);
   for ( i = 0 ; i < ndim ; i++){
     wmatrix[i*ndim+i] = cexp((-0.5*IMAG*dt/AU2PS*w[i]));
   }
-  dagger(ndim,Vt,V);
-  M_complextimesM_complex(ndim,wmatrix,V,temp);
-  M_complextimesM_complex(ndim,Vt,temp,expA);
-  free(Vt);
+
+  /* The transformation matrix O in A=OwOt contains the eigenvectors V as columns */
+  for(i=0;i<ndim;i++){
+    for(j=0;j<ndim;j++){
+      O[i+j*ndim]=V[j+i*ndim];
+    }
+  }
+  dagger(ndim,Ot,O);
+  M_complextimesM_complex(ndim,wmatrix,Ot,temp);
+  M_complextimesM_complex(ndim,O,temp,expA);
+
+  free(O);
+  free(Ot);
   free(V);
   free(w);
   free(wmatrix);
@@ -649,7 +686,7 @@ static void  propagate_local_dia(int ndim,double dt, dplx *C, dplx *vec,
   dplx
     *invsqrtSS,*T,*transposeT,*ham;
   dplx
-    *H,*expH,*ctemp;
+    *expH,*ctemp;
 
   snew(S,ndim*ndim);
   snew(SS,ndim*ndim);
@@ -659,7 +696,6 @@ static void  propagate_local_dia(int ndim,double dt, dplx *C, dplx *vec,
   snew(transposeT,ndim*ndim);
   snew(E,ndim*ndim);
   snew(ham,ndim*ndim);
-  snew(H, ndim*ndim);
   snew(expH, ndim*ndim);
   snew(ctemp,ndim);
 
@@ -700,14 +736,6 @@ static void  propagate_local_dia(int ndim,double dt, dplx *C, dplx *vec,
     C[i]=ctemp[i];
   }
 
-//
-//  fprintf(stderr,"From propagate_local_dia, C matrix elements:\n");
-//  for(i=0;i<ndim;i++){
-//    fprintf(stderr,"C[%d]=%lf+%lfI ",i,creal(C[i]),cimag(C[i]));
-//  }
-//  fprintf(stderr,"\n");
-
-  free(H);
   free(ham);
   free(T);
   free(transposeT);
@@ -718,7 +746,7 @@ static void  propagate_local_dia(int ndim,double dt, dplx *C, dplx *vec,
   free(E);
   free(expH);
   free(ctemp);
-} 
+} /* propagate_local_dia */ 
 
 static void propagate(int dim, double dt, dplx *C, dplx *vec, dplx *vecold, double *QMener, double *QMenerold)
 {
@@ -1080,13 +1108,57 @@ sparse_eigensolver(gmx_sparsematrix_t *    A,
 }
 /* end of eigensolver code */
 
+double cavity_dispersion(int n, t_QMrec *qm);
+
+/* Function that reads data from a given file, n indicates the number of columns in the file */
+void read_data(FILE* file_in, char* filename, int N, double* variable_one, double* variable_two, double* variable_three, int n){
+  int
+    i;
+  char*
+    buf;
+
+  fprintf(stderr,"%s file exists, reading its content\n",filename);
+  snew(buf,3000);
+
+  if(n==3){
+    for(i=0;i<N;i++){
+      if(NULL == fgets(buf,3000,file_in)){
+        gmx_fatal(FARGS,"Error reading %s, check its content\n");
+      }
+      else{
+        sscanf(buf,"%lf %lf %lf",&variable_one[i],&variable_two[i],&variable_three[i]);
+      }
+    };
+  }
+  else if(n==2){
+    for(i=0;i<N;i++){
+      if(NULL == fgets(buf,3000,file_in)){
+        gmx_fatal(FARGS,"Error reading %s, check its content\n");
+      }
+      else{
+        sscanf(buf,"%lf %lf",&variable_one[i],&variable_two[i]);
+      }
+    };
+  }
+  else{
+    for(i=0;i<N;i++){
+      if(NULL == fgets(buf,3000,file_in)){
+        gmx_fatal(FARGS,"Error reading %s, check its content\n");
+      }
+      else{
+        sscanf(buf,"%lf",&variable_one[i]);
+      }
+    };
+  }
+  free(buf);
+} /* end of read_data */
 
 /* TODO: this should be made thread-safe */
 
 /* Gaussian interface routines */
 void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
   FILE    
-    *rffile=NULL,*out=NULL,*Cin=NULL,*zin=NULL,*eigvecin=NULL;
+    *rffile=NULL,*out=NULL,*Cin=NULL,*zin=NULL,*cavin=NULL,*eigvecin=NULL;
   ivec
     basissets[eQMbasisNR]={{0,3,0},
 			   {0,3,0},/*added for double sto-3g entry in names.c*/
@@ -1099,13 +1171,11 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
 			   {1,6,11},
 			   {4,6,0}};
   char
-    *buf;
+    *buf,*filename;
   int
     i,j,ndim=1,seed,print=1;
   double
     *eig_real,*eig_imag; 
-  dplx
-    *eig;
  
   /* using the ivec above to convert the basis read form the mdp file
    * in a human readable format into some numbers for the gaussian
@@ -1222,9 +1292,9 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
       snew(qm->devel_dir,200);
       sscanf(buf,"%s",qm->devel_dir);
     }
-    else
+    else{
       gmx_fatal(FARGS,"no $DEVEL_DIR, this is were the modified links reside.\n");
-
+    }
 
     if(qm->bQED){
       fprintf(stderr,"\nDoing QED");
@@ -1247,29 +1317,37 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
           system(buf);
           ndim=cr->ms->nsim;
         }
-        else
+        else{
           gmx_fatal(FARGS,"no $TMP_DIR, this is were the temporary in/output is written.\n");
+	}
       }
       ndim+=(qm->n_max-qm->n_min+1);
       snew(qm->creal,ndim);
       snew(qm->cimag,ndim);
+
+      /* Characters array to store name of files to be read */
+      snew(filename,5000);
+
       Cin=fopen("C.dat","r");
       if (Cin){
-        fprintf(stderr,"reading coefficients from C.dat\n");
-        if(NULL == fgets(buf,3000,Cin)){
-          gmx_fatal(FARGS,"Error reading C.dat");
+	/* First read seed */
+	sprintf(filename,"C.dat");
+	if(print){
+	  fprintf(stderr,"Reading data in %s\n",filename);
+	}
+	if(NULL == fgets(buf,3000,Cin)){
+          gmx_fatal(FARGS,"Error reading seed in C.dat\n");
         }
         sscanf(buf,"%d\n",&seed);
-        fprintf(stderr,"setting randon seed to %d\n",seed);
-        for(i=0;i<ndim;i++){
-          if(NULL == fgets(buf,3000,Cin)){
-            gmx_fatal(FARGS,"Error reading C.dat, no expansion coeficient");
-          }
-          sscanf(buf,"%lf %lf",&qm->creal[i],&qm->cimag[i]);
-        }
-        /* rho 0, only population */
+	if(print){
+	  fprintf(stderr,"setting randon seed to %d\n",seed);
+	}
+	/* Then read C(t) coefficients */
+	read_data(Cin,filename,ndim,qm->creal,qm->cimag,qm->cimag,2); // "2" indicates that there are two cvolumns (data is complex) so we repeat the 3rd argument
+
+	/* Then read rho0, only population */
         if(NULL == fgets(buf,3000,Cin)){
-          gmx_fatal(FARGS,"Error reading C.dat: no rho0");
+          gmx_fatal(FARGS,"Error reading C.dat: no rho0\n");
         }
         sscanf(buf,"%lf",&qm->groundstate);
 
@@ -1281,7 +1359,7 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
           for(i=0;i<ndim;i++){
             fprintf(stderr,"%lf ",conj(qm->creal[i]+IMAG*qm->cimag[i])*(qm->creal[i]+IMAG*qm->cimag[i]));
           }
-          fprintf(stderr,"rho0: %lf ",qm->groundstate);
+          fprintf(stderr,"\nrho0: %lf\n ",qm->groundstate);
         }
       }
       else {
@@ -1290,33 +1368,22 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
         if (buf){
           sscanf(buf,"%d",&seed);
         }
-        fprintf(stderr,"No C.dat file, setting C[%d]=1.0+0.0I\n",qm->polariton);
-        qm->creal[qm->polariton]=1;
+	qm->creal[qm->polariton]=1;
         qm->groundstate=0.0;
-        fprintf(stderr,"setting randon seed to %d\n",seed);
+        if(print){ 
+	  fprintf(stderr,"No C.dat file, setting C[%d]=%lf+%lfI\n",qm->polariton,qm->creal[qm->polariton],qm->cimag[qm->polariton]);
+	  fprintf(stderr,"setting randon seed to %d\n",seed);
+	}
       }
 
       /* File for positioning the molecules as desired along the z axis */
       snew(qm->z,ndim-(qm->n_max-qm->n_min+1));
       zin=fopen("z.dat","r");
       if(zin){
-	fprintf(stderr,"z.dat file exists, reading z-positions\n");
+	sprintf(filename,"z.dat");
+	read_data(zin,filename,ndim-(qm->n_max-qm->n_min+1),qm->z,qm->z,qm->z,1); // indicates that there is 1 column (data is real) so we repeat the 3rd and 4th arguments
 	for(i=0;i<ndim-(qm->n_max-qm->n_min+1);i++){
-	  if(NULL == fgets(buf,300,zin)){
-	    gmx_fatal(FARGS,"Error reading z.dat, check its content\n");
-	  }
-	  else{
-	    sscanf(buf,"%lf",&qm->z[i]);
-	    qm->z[i]*=microM2BOHR;
-	    if (MULTISIM(cr)){
-	      if (cr->ms->sim==0){
-	        fprintf(stderr,"node %d, z[%d]=%lf\n",cr->ms->sim,i,qm->z[i]);
-	      }
-	    }
-	    else{
- 	      fprintf(stderr,"z[%d]=%lf\n",i,qm->z[i]);
-	    }
-	  }
+	  qm->z[i]*=microM2BOHR;
 	}
 	fclose(zin);
       }
@@ -1327,6 +1394,67 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
 	for(i=0;i<ndim-(qm->n_max-qm->n_min+1);i++){
 	  qm->z[i]=i*qm->L*microM2BOHR/(ndim-(qm->n_max-qm->n_min+1));
 	}
+      }
+
+     /* print for security */   
+      if(MULTISIM(cr)){
+	fprintf(stderr,"node %d, z[%d]=%lf\n",cr->ms->sim,cr->ms->sim,qm->z[cr->ms->sim]);
+      }
+      else{
+	fprintf(stderr,"z[0]=%lf\n",qm->z[0]);
+      }
+
+      /* File for proviging the cavity dispersion and associated mode losses */
+      snew(qm->disp,(qm->n_max-qm->n_min+1));
+      snew(qm->gamma,(qm->n_max-qm->n_min+1));
+      cavin=fopen("dispersion_and_losses.dat","r");
+      if(cavin){
+	sprintf(filename,"dispersion_and_losses.dat");
+	read_data(cavin,filename,(qm->n_max-qm->n_min+1),qm->disp,qm->gamma,qm->gamma,2);
+	fclose(cavin);
+      }
+      else{
+	if(print){
+	  fprintf(stderr,"No cavity dispersion file, setting the dispersion of a Fabry-Perot cavity of length L=%lf um, w0=%lf a.u., refractive index n_index=%lf and equal losses for all modes at a rate =%lf ps-1\n",qm->L,qm->omega,qm->n_index,qm->QEDdecay);
+	}
+  	for(i=0;i<(qm->n_max-qm->n_min+1);i++){
+	  qm->disp[i]=cavity_dispersion((qm->n_min+i),qm);
+	  qm->gamma[i]=qm->QEDdecay;
+	};
+      }
+ 
+      /* File for proviging the couplings between molecules & cavity modes */
+      snew(qm->couplings_x,(ndim-(qm->n_max-qm->n_min+1))*(qm->n_max-qm->n_min+1));
+      snew(qm->couplings_y,(ndim-(qm->n_max-qm->n_min+1))*(qm->n_max-qm->n_min+1));
+      snew(qm->couplings_z,(ndim-(qm->n_max-qm->n_min+1))*(qm->n_max-qm->n_min+1));
+      coupin=fopen("couplings.dat","r");
+      if(coupin){
+	sprintf(filename,"couplings.dat");
+	read_data(coupin,filename,(ndim-(qm->n_max-qm->n_min+1))*(qm->n_max-qm->n_min+1),qm->couplings_x,qm->couplings_y,qm->couplings_z,3);  //"3" indicates there are 3 columns in the file to be read
+	qm->provided_couplings=1;
+	fclose(coupin);
+      }
+      else{
+	if(print){
+	  fprintf(stderr,"No couplings between molecules and cavity modes, couplings to a Fabry-Perot cavity of length L=%lf um, w0=%lf a.u. and refractive index n_index=%lf will be computed on the fly\n",qm->L,qm->omega,qm->n_index);
+	}
+      }
+
+      /* File for proviging couplings between cavity modes */
+      snew(qm->mode_couplings,(qm->n_max-qm->n_min+1)*(qm->n_max-qm->n_min+1));
+      mode_coupin=fopen("mode_couplings.dat","r");
+      if(mode_coupin){
+	sprintf(filename,"mode_couplings.dat");
+	read_data(mode_coupin,filename,(qm->n_max-qm->n_min+1)*(qm->n_max-qm->n_min+1),qm->mode_couplings,qm->mode_couplings,qm->mode_couplings,2);
+	fclose(mode_coupin);
+      }
+      else{
+	if(print){
+	  fprintf(stderr,"No couplings between cavity modes, these will be set to zero\n");
+	}
+  	for (i=0;i<(qm->n_max-qm->n_min+1)*(qm->n_max-qm->n_min+1);i++){
+	  qm->mode_couplings[i]=0.0;
+	};
       }
 
       /* File for providing one step eigenvectors and avoid random phases in continuation runs */
@@ -1340,25 +1468,17 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
       if(qm->bContinuation){
 	eigvecin=fopen("eig_vec_last.dat","r");
 	if(eigvecin){
-	  fprintf(stderr,"eig_vec_last.dat file exists, reading eigenvectors from last step of previous run\n");
+	  if(print){
+	    fprintf(stderr,"eig_vec_last.dat file exists, reading eigenvectors from last step of previous run\n");
+	  }
 	  snew(eig_real,ndim*ndim);
 	  snew(eig_imag,ndim*ndim);
-	  for(i=0;i<ndim*ndim;i++){
-	    if(NULL == fgets(buf,2*sizeof(double)+4,eigvecin)){
-	      gmx_fatal(FARGS,"Error reading eig_vec_last.dat, check its content\n");
-	    }
-	    else{
-	      sscanf(buf,"%lf %lf",&eig_real[i],&eig_imag[i]);
-	    }
-	  };
-	  snew(eig,ndim*ndim);
-	  for(i=0;i<ndim*ndim;i++){
-	    eig[i]=eig_real[i]+IMAG*eig_imag[i];
-	  }
+	  sprintf(filename,"eig_vec_last.dat");
+	  read_data(eigvecin,filename,ndim*ndim,eig_real,eig_imag,eig_imag,2); // "2" indicates that there are two columns (data is complex)
 	  /* copy the eigenvectors read from eig_vec_last.dat to qmrec */
 	  snew(qm->eigvec,ndim*ndim);
 	  for(i=0;i<ndim*ndim;i++){
-	    qm->eigvec[i]=eig[i];
+	    qm->eigvec[i]=eig_real[i]+IMAG*eig_imag[i];
 	  };
           /* Print to check correcteness of read */
 	  if(print){
@@ -1374,12 +1494,14 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
 	  /* Set qm boolean to indicate it is a Continuation run */
 	  qm->QEDrestart=1;
 	  fclose(eigvecin);
+	free(eig_real);
+	free(eig_imag);
 	}
 	else{
 	  if(print){
 	    fprintf(stderr,"Warning: No eigenvectors file for last step of previous run, eigenvectors phases will be undetermined\n");
 	  }
-  	  snew(qm->eigvec,ndim*ndim);
+	  snew(qm->eigvec,ndim*ndim);
 	  qm->QEDrestart=0;
 	}
       }
@@ -1400,8 +1522,9 @@ void init_gaussian(t_commrec *cr, t_QMrec *qm, t_MMrec *mm){
         snew(qm->work_dir,3000);
         sscanf(buf,"%s",qm->work_dir);
       }
-      else
+      else{
         gmx_fatal(FARGS,"no $WORK_DIR, this is were the QED-specific output is written.\n");
+      }
     }
   }
   fprintf(stderr,"gaussian initialised...\n");
@@ -3140,26 +3263,22 @@ void get_dipole_gradients(t_QMrec *qm, rvec E,rvec tdmgrad[],rvec tdm)
   step++;
 } /* get_dipole_gradients */
 
-void   propagate_TDSE(int step, t_QMrec *qm, dplx *eigvec, int ndim, double *eigval, real dt, t_QMMMrec *qr){
+void  propagate_TDSE(int step, t_QMrec *qm, dplx *eigvec, int ndim, double *eigval, real dt, t_QMMMrec *qr){
   fprintf(stderr,"Call to propagate_TDSE\n");
   int
     i;
   dplx 
-    *c=NULL,*cold=NULL,*U=NULL; 
+    *c=NULL,*U=NULL; 
 //  FILE
 //    *Cout=NULL;
 //  char
 //    buf[5000];
 
   snew(c,ndim); 
-  snew(cold,ndim);
 
   if(step){
     for (i=0;i<ndim;i++){
-      cold[i]=qm->creal[i]+IMAG*qm->cimag[i];
       c[i]=qm->creal[i]+IMAG*qm->cimag[i];
-//      fprintf(stderr,"|c[%d]|^2 = %lf ;",i,conj(c[i])*c[i]);
-//      fprintf(stderr,"|g[%d]|^2 = %lf\n",i,conj(cold[i])*cold[i]);
     }
     track_states(qm->eigvec, eigvec, ndim);
     /* we propagate the wave function in the local diabatic basis, i.e.
@@ -3200,7 +3319,6 @@ void   propagate_TDSE(int step, t_QMrec *qm, dplx *eigvec, int ndim, double *eig
     fprintf(stderr,"\n");
   }
   free(c);
-  free(cold);
   fprintf(stderr,"propagate_TDSE done\n");
 }
 
@@ -3549,6 +3667,12 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
   snew(tdmZMM,mm->nrMMatoms);
   write_gaussian_input_QED(cr,step,fr,qm,mm);
 
+  /* unit vector associated to the cavity field E=Ex*u1+Ey*u2+Ez*u3 */
+  double u[3];
+  u[0]=qm->E[0]/sqrt(iprod(qm->E,qm->E));
+  u[1]=qm->E[1]/sqrt(iprod(qm->E,qm->E));
+  u[2]=qm->E[2]/sqrt(iprod(qm->E,qm->E)); 
+
   /* silly array to communicate the courrent state*/
   snew(state,1);
 
@@ -3611,10 +3735,6 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
   */
   snew(couplings,nmol*(qm->n_max-qm->n_min+1));
   double V0_2EP = qm->omega/iprod(qm->E,qm->E); //2*Epsilon0*V_cav at k=0 (in a.u.)
-  double u[3];
-  u[0]=qm->E[0]/sqrt(iprod(qm->E,qm->E));
-  u[1]=qm->E[1]/sqrt(iprod(qm->E,qm->E));
-  u[2]=qm->E[2]/sqrt(iprod(qm->E,qm->E)); //unit vector in E=Ex*u1+Ey*u2+Ez*u3
   for (i=0;i<(qm->n_max-qm->n_min+1);i++){
     couplings[m*(qm->n_max-qm->n_min+1)+i] = -iprod(tdm,u)*sqrt(cavity_dispersion(qm->n_min+i,qm)/V0_2EP)*cexp(+IMAG*2*M_PI*(qm->n_min+i)/L_au*qm->z[m]);
   }
@@ -3659,10 +3779,10 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
     }
     for (k=0;k<nmol;k++){
       for (j=0;j<(qm->n_max-qm->n_min+1);j++){
-	matrix[nmol+j+(k*ndim)]= conj(couplings[k*(qm->n_max-qm->n_min+1)+j]);
-	matrix[ndim*nmol+k+(j*ndim)]= (couplings[k*(qm->n_max-qm->n_min+1)+j]);
-      }
-    }
+	matrix[nmol+j+(k*ndim)]= (couplings[k*(qm->n_max-qm->n_min+1)+j]);
+	matrix[ndim*nmol+k+(j*ndim)]= conj(couplings[k*(qm->n_max-qm->n_min+1)+j]);
+      };
+    };
 
     fprintf(stderr,"\n\ndiagonalizing matrix\n");
     diag(ndim,eigval,eigvec,matrix);
@@ -3711,7 +3831,7 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
   for(i=0;i<ndim*ndim;i++){
     eigvec_real[i]=creal(eigvec[i]);
     eigvec_imag[i]=cimag(eigvec[i]);
-  }
+  };
   if(MULTISIM(cr)){
     gmx_sumd_sim(ndim*ndim,eigvec_real,cr->ms);
     gmx_sumd_sim(ndim*ndim,eigvec_imag,cr->ms);
@@ -3721,8 +3841,8 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
       qm->polariton = state[0];
     }
     /* communicate the time-dependent expansion coefficients needed for computing mean-field forces */
-    gmx_sumd_sim(ndim,qm->creal ,cr->ms);
-    gmx_sumd_sim(ndim,qm->cimag ,cr->ms);
+    gmx_sumd_sim(ndim,qm->creal,cr->ms);
+    gmx_sumd_sim(ndim,qm->cimag,cr->ms);
   }
   for(i=0;i<ndim*ndim;i++){
     eigvec[i]=eigvec_real[i]+IMAG*eigvec_imag[i];
@@ -3879,7 +3999,7 @@ real call_gaussian_QED(t_commrec *cr,  t_forcerec *fr,
   free(eigvec_imag);
   free(energies);
   free(state);
-  free (final_eigenvecfile);
+  free(final_eigenvecfile);
   return(QMener);
 } /* call_gaussian_QED */
 
